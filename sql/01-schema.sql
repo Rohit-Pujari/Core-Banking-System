@@ -53,6 +53,8 @@ CREATE TABLE IF NOT EXISTS loans (
   principal NUMERIC(16,2) NOT NULL CHECK(principal>0),
   rate NUMERIC(5,2) NOT NULL,
   months INTEGER NOT NULL CHECK(months>0),
+  account_id INT,
+  FOREIGN KEY (account_id) REFERENCES accounts(id),
   reviewed_by INT,
   reviewed_at DATETIME(3),
   status VARCHAR(255) NOT NULL CHECK(status IN ('Active','Pending','Closed','Rejected'))

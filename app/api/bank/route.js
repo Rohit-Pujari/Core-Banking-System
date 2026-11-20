@@ -40,7 +40,7 @@ export async function GET(request) {
       accounts: `SELECT a.*,c.name,b.name AS branch FROM accounts a JOIN customers c ON c.id=a.customer_id JOIN branches b ON b.id=a.branch_id ${customer ? 'WHERE a.customer_id=?' : ''} ORDER BY a.id`,
       customers: `SELECT * FROM customers ${customer ? 'WHERE id=?' : ''} ORDER BY id`,
       transfers: `SELECT t.*,s.number AS source,d.number AS destination,c.name FROM transfers t JOIN accounts s ON s.id=t.from_account JOIN accounts d ON d.id=t.to_account JOIN customers c ON c.id=s.customer_id ${customer ? 'WHERE s.customer_id=? OR d.customer_id=?' : ''} ORDER BY t.created_at DESC,t.id DESC LIMIT 100`,
-      loans: `SELECT l.*,c.name,monthly_emi(principal,rate,months) AS emi FROM loans l JOIN customers c ON c.id=l.customer_id ${customer ? 'WHERE l.customer_id=?' : ''} ORDER BY l.id`
+      loans: `SELECT l.*,c.name,a.number AS account_number,monthly_emi(principal,rate,months) AS emi FROM loans l JOIN customers c ON c.id=l.customer_id LEFT JOIN accounts a ON a.id=l.account_id ${customer ? 'WHERE l.customer_id=?' : ''} ORDER BY l.id`
     };
     for (const [key, sql] of Object.entries(sqls)) result[key] = (await db.query(sql, customer && key === 'transfers' ? [...params, ...params] : params)).rows;
     result.branches = (await db.query(queries[2].sql)).rows;
@@ -117,7 +117,10 @@ export async function POST(request) {
         };
       if (!rates[b.kind] || !/^\d{1,10}(\.\d{1,2})?$/.test(principal) || Number(principal) < 1000 || Number(principal) > 10000000 || !Number.isInteger(months) || months < 6 || months > 360) throw new HttpError('Choose a loan product, ₹1,000–₹1 crore and a term of 6–360 months.');
       await db.transaction(async tx => {
-        await tx.query("INSERT INTO loans(customer_id,kind,principal,rate,months,status) VALUES(?,?,?,?,?,'Pending')", [user.customer_id, b.kind, principal, rates[b.kind], months]);
+        const accountId = id(b.account_id);
+        const account = await tx.query("SELECT id FROM accounts WHERE id=? AND customer_id=? AND status='Active' FOR UPDATE", [accountId, user.customer_id]);
+        if (!account.rows.length) throw new HttpError('Select one of your active accounts.');
+        await tx.query("INSERT INTO loans(customer_id,account_id,kind,principal,rate,months,status) VALUES(?,?,?,?,?,?,'Pending')", [user.customer_id, accountId, b.kind, principal, rates[b.kind], months]);
       });
       return reply({
         message: 'Loan application submitted. Your bank will review it.'
@@ -127,11 +130,19 @@ export async function POST(request) {
       admin(user);
       if (!['Active', 'Rejected'].includes(b.status)) throw new HttpError('Invalid review decision.');
       await db.transaction(async tx => {
-        const loan = await tx.query("UPDATE loans SET status=?,reviewed_by=?,reviewed_at=now() WHERE id=? AND status='Pending'", [b.status, user.id, id(b.id)]);
-        if (!loan.affectedRows) throw new HttpError('This loan is no longer pending.');
+        const loan = (await tx.query("SELECT * FROM loans WHERE id=? FOR UPDATE", [id(b.id)])).rows[0];
+        if (!loan || loan.status !== 'Pending') throw new HttpError('This loan is no longer pending.');
+        let accountId = loan.account_id;
+        if (b.status === 'Active') {
+          // Older applications have no nominated account. Staff select one before approval.
+          accountId ??= id(b.account_id);
+          const credit = await tx.query("UPDATE accounts SET balance=balance+? WHERE id=? AND customer_id=? AND status='Active' AND balance<=99999999999999.99-?", [loan.principal, accountId, loan.customer_id, loan.principal]);
+          if (!credit.affectedRows) throw new HttpError('The selected account cannot receive this loan. Approval was cancelled.');
+        }
+        await tx.query('UPDATE loans SET status=?,account_id=?,reviewed_by=?,reviewed_at=now() WHERE id=?', [b.status, accountId, user.id, loan.id]);
       });
       return reply({
-        message: 'Loan decision recorded. Approval does not automatically disburse funds.'
+        message: b.status === 'Active' ? 'Loan approved and principal credited to the selected account.' : 'Loan rejected.'
       });
     }
     if (b.action === 'kyc') {

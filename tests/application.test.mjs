@@ -129,10 +129,13 @@ test('Application sessions, ownership and customer/employee/admin workflows', as
     }, employee)).status, 200);
     assert.equal((await call({
       action: 'loan',
+      account_id: 2,
       kind: 'Personal loan',
       principal: '50000',
       months: '24'
     }, diya)).status, 200);
+    const balanceBeforeLoan = async () => Number((await db.query('SELECT balance FROM accounts WHERE id=2')).rows[0].balance);
+    const originalBalance = await balanceBeforeLoan();
     const pending = (await db.query("SELECT id FROM loans WHERE customer_id=2 AND status='Pending'")).rows[0].id;
     assert.equal((await call({
       action: 'loan-review',
@@ -149,6 +152,8 @@ test('Application sessions, ownership and customer/employee/admin workflows', as
       id: pending,
       status: 'Rejected'
     }, admin)).status, 400);
+    assert.equal((await call({action:'loan-review', id:pending, status:'Active'}, admin)).status, 400);
+    assert.equal(await balanceBeforeLoan(), originalBalance + 50000);
     const registration = await authenticate(request('/api/auth', {
       action: 'register',
       name: 'New Customer',

@@ -112,6 +112,8 @@ If the sender had ₹500 and the receiver had ₹300, after the transfer they ha
 
 A successful transfer creates one `transfers` row and normally two `audit_log` rows. The function and trigger definitions are in [01-schema.sql](../sql/01-schema.sql). The API calls them from [the bank route](../app/api/bank/route.js).
 
+**Loan to receiving account.** The borrower selects an active account when applying. Approval locks the pending loan, credits its principal to that account, and records the admin decision in one MySQL transaction. The balance trigger records the credit. For an older pending loan, the admin selects the borrower’s receiving account before approval.
+
 ## Evaluator commands
 
 A customer uploads their KYC PDF from My profile. MongoDB stores the file under the MySQL customer ID. Staff download it from Customers and record the verification decision in MySQL.
@@ -149,7 +151,7 @@ The employee workspace shows bank records for servicing. In **Customers**, revie
 
 ### Admin screens
 
-The admin has the employee tools plus loan decisions, employee account creation, the **Audit trail**, and Reports. In **Loans**, approve or reject a pending application. This changes its status and records the reviewer. Approval does not send money to an account.
+The admin has the employee tools plus loan decisions, employee account creation, the **Audit trail**, and Reports. In **Loans**, approve or reject a pending application. This changes its status and records the reviewer. Approval credits the principal to the receiving account and triggers an audit entry.
 
 The **Audit trail** lists the old and new values created by the balance trigger. It records balance changes, including changes from the seeded transfers.
 

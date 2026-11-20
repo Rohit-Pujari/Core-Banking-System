@@ -70,6 +70,8 @@ r7 [shape=diamond,label="Reviews",fillcolor="#e5efdf",height=0.7];
 User -- r7 [label="(0,N)"]; r7 -- Loan [label="(0,1)"];
 r8 [shape=diamond,label="Has session",fillcolor="#e5efdf",height=0.7];
 User -- r8 [label="(0,N)"]; r8 -- Session [label="(1,1)"];
+funds [shape=diamond,label="Credits on approval",fillcolor="#e5efdf"];
+Account -- funds [label="(0,N)"]; funds -- Loan [label="(0,1)"];
 r9 [shape=diamond,label="Parent of",fillcolor="#e5efdf",height=0.7];
 Branch -- r9 [label="parent (0,N)"]; r9 -- Branch [label="child (0,1)"];
 }
