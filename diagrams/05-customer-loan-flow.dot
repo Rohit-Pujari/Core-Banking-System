@@ -1,0 +1,23 @@
+digraph G { graph [rankdir=LR, bgcolor="#ffffff", pad="0.5", nodesep="0.55", ranksep="1.0", fontname="DejaVu Sans", fontsize=18]; node [shape=box, style="rounded,filled", fillcolor="#edf5ef", color="#a8c4b0", fontname="DejaVu Sans", fontsize=12, margin="0.2,0.15"]; edge [color="#597766", fontname="DejaVu Sans", fontsize=10, arrowsize=0.8];
+graph [rankdir=TB,label="Vault — Onboarding and loan review",labelloc=t];
+register [label="Customer registers / employee creates customer login"];
+kyc [label="Customer profile: KYC pending"];
+verify [label="Employee or admin verifies KYC"];
+account [label="Employee or admin opens account
+Starting balance = 0"];
+use [label="Customer views account and receives transfers"];
+apply [label="Signed-in customer submits loan application
+Product • Amount • Term"];
+validate [label="Server validates input and assigns product rate
+Loan status = Pending"];
+review [label="Administrator reviews application"];
+approve [label="Approve: status = Active
+Record reviewer and review time"];
+reject [label="Reject: status = Rejected
+Record reviewer and review time"];
+view [label="Customer sees decision and calculated EMI
+No automatic disbursement or repayment collection",fillcolor="#fff5df"];
+register -> kyc -> verify -> account -> use;
+register -> apply [label="loan application does not require an open account",style=dashed];apply -> validate -> review;review -> approve;review -> reject;approve -> view;reject -> view;
+
+}

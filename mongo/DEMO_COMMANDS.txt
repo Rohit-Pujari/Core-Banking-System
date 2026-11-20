@@ -1,0 +1,22 @@
+// Enter mongosh with:
+// docker compose exec mongo mongosh vault_documents
+
+// 1. Read nested document collections (fictional, independently seeded demo data).
+db.kyc_documents.find().pretty()
+
+// 2. Query nested arrays and fields.
+db.kyc_documents.find({"documents.status":"pending"},{name:1,documents:1})
+
+// 3. Schema flexibility: add a nested field without ALTER TABLE.
+db.kyc_documents.updateOne({customer_id:1},{$set:{"preferences.language":"Kannada","review.next_due":"2027-01-15"}})
+db.kyc_documents.findOne({customer_id:1})
+
+// 4. Aggregation pipeline with unwind and group.
+db.kyc_documents.aggregate([{$unwind:"$documents"},{$group:{_id:"$documents.status",document_count:{$sum:1}}},{$sort:{document_count:-1}}])
+
+// 5. NoSQL indexed full-text search (lexical, not vector).
+db.knowledge.find({$text:{$search:"loan"}},{title:1,score:{$meta:"textScore"}}).sort({score:{$meta:"textScore"}})
+
+// 6. Demonstrate insertion and deletion without altering seeded documents.
+db.knowledge.insertOne({_id:"demo-temp",title:"Temporary",body:"Presentation record",tags:["demo"]})
+db.knowledge.deleteOne({_id:"demo-temp"})

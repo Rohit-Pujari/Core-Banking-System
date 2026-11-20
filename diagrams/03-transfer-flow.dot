@@ -1,0 +1,25 @@
+digraph G { graph [rankdir=LR, bgcolor="#ffffff", pad="0.5", nodesep="0.55", ranksep="1.0", fontname="DejaVu Sans", fontsize=18]; node [shape=box, style="rounded,filled", fillcolor="#edf5ef", color="#a8c4b0", fontname="DejaVu Sans", fontsize=12, margin="0.2,0.15"]; edge [color="#597766", fontname="DejaVu Sans", fontsize=10, arrowsize=0.8];
+graph [rankdir=TB,label="Vault — Internal transfer transaction",labelloc=t];
+start [label="Enter source account, recipient number and amount"];
+auth [label="Verify session and request origin
+Validate amount and account identifiers"];
+begin [label="BEGIN transaction"];
+owner [label="Check source ownership for customers
+Resolve recipient account number"];
+func [label="transfer_funds(source, destination, amount, note)"];
+lock [label="Validate amount and distinct accounts
+Lock both accounts in ascending ID order
+Check active status and available balance"];
+update [label="Debit source and credit destination"];
+trigger [label="balance_audit AFTER UPDATE trigger
+Insert old/new balances for each changed account"];
+insert [label="Insert transfer record"];
+
+commit [label="COMMIT
+Return transfer reference and refresh balances"];
+fail [label="Reject invalid request
+ROLLBACK if a transaction has started",fillcolor="#fcece7"];
+start -> auth -> begin -> owner -> func -> lock -> update -> trigger -> insert -> commit;
+auth -> fail [label="unauthenticated / invalid",style=dashed];owner -> fail [label="not owned / missing",style=dashed];lock -> fail [label="frozen / insufficient funds",style=dashed];update -> fail [label="database error",style=dashed];
+
+}

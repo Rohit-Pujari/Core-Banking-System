@@ -1,0 +1,23 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: vault
+      POSTGRES_USER: bank_admin
+      POSTGRES_PASSWORD: bank_demo
+    ports:
+      - "5433:5432"
+    volumes:
+      - bank_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bank_admin -d vault"]
+      interval: 3s
+      retries: 10
+  mongo:
+    image: mongo:8
+    volumes:
+      - mongo_data:/data/db
+      - ./mongo/init.js:/docker-entrypoint-initdb.d/01-seed.js:ro
+volumes:
+  mongo_data:
+  bank_data:

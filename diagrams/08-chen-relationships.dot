@@ -1,0 +1,33 @@
+graph ER {
+graph [label="Vault — relationship overview (attributes omitted)", labelloc=t, fontsize=22, fontname="Arial", bgcolor="white", pad=0.45, nodesep=0.4, ranksep=1.0, overlap=false, splines=true];
+node [fontname="Arial", fontsize=13, style=filled, fillcolor="#d7ead0", color="#333333"];
+edge [fontname="Arial", fontsize=11, color="#333333"];
+Customer [shape=box, label="Customer", margin="0.18,0.12"];
+Branch [shape=box, label="Branch", margin="0.18,0.12"];
+Account [shape=box, label="Account", margin="0.18,0.12"];
+Transfer [shape=box, label="Transfer", margin="0.18,0.12"];
+Balance_Audit [shape=box, label="Balance Audit", margin="0.18,0.12"];
+Loan [shape=box, label="Loan", margin="0.18,0.12"];
+User [shape=box, label="User", margin="0.18,0.12"];
+Session [shape=box, label="Session", margin="0.18,0.12"];
+r0 [shape=diamond,label="Owns",fillcolor="#e5efdf",height=0.7];
+Customer -- r0 [label="(0,N)"]; r0 -- Account [label="(1,1)"];
+r1 [shape=diamond,label="Maintains",fillcolor="#e5efdf",height=0.7];
+Branch -- r1 [label="(0,N)"]; r1 -- Account [label="(1,1)"];
+r2 [shape=diamond,label="Sends",fillcolor="#e5efdf",height=0.7];
+Account -- r2 [label="(0,N)"]; r2 -- Transfer [label="(1,1)"];
+r3 [shape=diamond,label="Receives",fillcolor="#e5efdf",height=0.7];
+Account -- r3 [label="(0,N)"]; r3 -- Transfer [label="(1,1)"];
+r4 [shape=diamond,label="Records",fillcolor="#e5efdf",height=0.7];
+Account -- r4 [label="(0,N)"]; r4 -- Balance_Audit [label="(1,1)"];
+r5 [shape=diamond,label="Borrows",fillcolor="#e5efdf",height=0.7];
+Customer -- r5 [label="(0,N)"]; r5 -- Loan [label="(1,1)"];
+r6 [shape=diamond,label="Has login",fillcolor="#e5efdf",height=0.7];
+Customer -- r6 [label="(0,1)"]; r6 -- User [label="(0,1)"];
+r7 [shape=diamond,label="Reviews",fillcolor="#e5efdf",height=0.7];
+User -- r7 [label="(0,N)"]; r7 -- Loan [label="(0,1)"];
+r8 [shape=diamond,label="Has session",fillcolor="#e5efdf",height=0.7];
+User -- r8 [label="(0,N)"]; r8 -- Session [label="(1,1)"];
+r9 [shape=diamond,label="Parent of",fillcolor="#e5efdf",height=0.7];
+Branch -- r9 [label="parent (0,N)"]; r9 -- Branch [label="child (0,1)"];
+}

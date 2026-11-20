@@ -1,0 +1,129 @@
+-- Banking DDL
+
+CREATE TABLE IF NOT EXISTS branches(id SERIAL PRIMARY KEY, name TEXT NOT NULL, city TEXT NOT NULL, parent_id INTEGER REFERENCES branches(id));
+CREATE TABLE IF NOT EXISTS customers(id SERIAL PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL, phone TEXT NOT NULL, kyc JSONB NOT NULL DEFAULT '{}', created_at TIMESTAMPTZ DEFAULT now());
+CREATE TABLE IF NOT EXISTS accounts(id SERIAL PRIMARY KEY, number TEXT UNIQUE NOT NULL, customer_id INTEGER NOT NULL REFERENCES customers(id), branch_id INTEGER NOT NULL REFERENCES branches(id), kind TEXT NOT NULL CHECK(kind IN ('Savings','Current')), balance NUMERIC(16,2) NOT NULL DEFAULT 0 CHECK(balance>=0), status TEXT NOT NULL DEFAULT 'Active' CHECK(status IN ('Active','Frozen','Closed')));
+CREATE TABLE IF NOT EXISTS transfers(id SERIAL PRIMARY KEY, from_account INTEGER NOT NULL REFERENCES accounts(id), to_account INTEGER NOT NULL REFERENCES accounts(id), amount NUMERIC(16,2) NOT NULL CHECK(amount>0), narration TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), CHECK(from_account<>to_account));
+CREATE INDEX IF NOT EXISTS transfers_date_idx ON transfers(created_at);
+CREATE TABLE IF NOT EXISTS audit_log(id SERIAL PRIMARY KEY, account_id INTEGER NOT NULL REFERENCES accounts(id), old_balance NUMERIC(16,2), new_balance NUMERIC(16,2), actor TEXT DEFAULT current_user, created_at TIMESTAMPTZ DEFAULT now());
+CREATE TABLE IF NOT EXISTS loans(id SERIAL PRIMARY KEY, customer_id INTEGER NOT NULL REFERENCES customers(id), kind TEXT NOT NULL, principal NUMERIC(16,2) NOT NULL CHECK(principal>0), rate NUMERIC(5,2) NOT NULL, months INTEGER NOT NULL CHECK(months>0), status TEXT NOT NULL CHECK(status IN ('Active','Pending','Closed')));
+CREATE OR REPLACE FUNCTION audit_balance() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF OLD.balance IS DISTINCT FROM NEW.balance THEN
+ INSERT INTO audit_log(account_id,old_balance,new_balance) VALUES(NEW.id,OLD.balance,NEW.balance);
+ END IF;
+ RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS balance_audit ON accounts;
+CREATE TRIGGER balance_audit AFTER UPDATE OF balance ON accounts FOR EACH ROW EXECUTE FUNCTION audit_balance();
+CREATE OR REPLACE FUNCTION transfer_funds(source_id INTEGER, destination_id INTEGER, value NUMERIC, note TEXT) RETURNS INTEGER LANGUAGE plpgsql AS $$
+DECLARE transfer_id INTEGER;
+BEGIN
+ IF value IS NULL OR value<=0 OR value<>round(value,2) OR source_id=destination_id THEN RAISE EXCEPTION 'Enter a positive amount with at most two decimals and distinct accounts'; END IF;
+ -- Consistent lock ordering prevents deadlocks between opposing transfers.
+ PERFORM id FROM accounts WHERE id IN(source_id,destination_id) ORDER BY id FOR UPDATE;
+ IF (SELECT count(*) FROM accounts WHERE id IN(source_id,destination_id) AND status='Active')<>2 THEN RAISE EXCEPTION 'Both accounts must exist and be active'; END IF;
+ IF (SELECT balance FROM accounts WHERE id=source_id)<value THEN RAISE EXCEPTION 'Insufficient funds'; END IF;
+ UPDATE accounts SET balance=balance-value WHERE id=source_id;
+ UPDATE accounts SET balance=balance+value WHERE id=destination_id;
+ INSERT INTO transfers(from_account,to_account,amount,narration) VALUES(source_id,destination_id,value,coalesce(nullif(trim(note),''),'Account transfer')) RETURNING id INTO transfer_id;
+ RETURN transfer_id;
+END $$;
+CREATE OR REPLACE FUNCTION monthly_emi(p NUMERIC,r NUMERIC,n INTEGER) RETURNS NUMERIC LANGUAGE SQL IMMUTABLE AS $$
+ SELECT round(CASE WHEN r=0 THEN p/n ELSE p*(r/1200)*power(1+r/1200,n)/(power(1+r/1200,n)-1) END,2);
+$$;
+
+
+-- Seed DML (fresh database only)
+
+INSERT INTO branches(name,city,parent_id) VALUES ('Head Office','Bengaluru',NULL),('Indiranagar','Bengaluru',1),('Koramangala','Bengaluru',1),('Jayanagar','Bengaluru',1);
+INSERT INTO customers(name,email,phone,kyc) VALUES
+('Aarav Sharma','aarav@example.com','9876501001','{"verified":true,"occupation":"Engineer","risk":"low"}'),
+('Diya Patel','diya@example.com','9876501002','{"verified":true,"occupation":"Designer","risk":"low"}'),
+('Arjun Rao','arjun@example.com','9876501003','{"verified":true,"occupation":"Business owner","risk":"medium"}'),
+('Ananya Iyer','ananya@example.com','9876501004','{"verified":true,"occupation":"Doctor","risk":"low"}'),
+('Kabir Mehta','kabir@example.com','9876501005','{"verified":false,"occupation":"Student","risk":"medium"}'),
+('Ishita Nair','ishita@example.com','9876501006','{"verified":true,"occupation":"Architect","risk":"low"}'),
+('Rohan Das','rohan@example.com','9876501007','{"verified":true,"occupation":"Consultant","risk":"low"}'),
+('Meera Reddy','meera@example.com','9876501008','{"verified":true,"occupation":"Entrepreneur","risk":"medium"}');
+INSERT INTO accounts(number,customer_id,branch_id,kind,balance,status) SELECT 'VB1000'||id,id,1+(id%4),CASE WHEN id%3=0 THEN 'Current' ELSE 'Savings' END,75000+id*42000,'Active' FROM customers;
+INSERT INTO accounts(number,customer_id,branch_id,kind,balance,status) VALUES('VB10009',1,2,'Current',450000,'Active'),('VB100010',5,3,'Savings',25000,'Frozen');
+DO $$ DECLARE i INTEGER; BEGIN FOR i IN 1..80 LOOP
+PERFORM transfer_funds(1+(i%8),1+((i+1)%8),(500+(i*317)%12000)::numeric, (ARRAY['Vendor payment','Monthly rent','Consulting fee','Family transfer','Invoice settlement'])[1+(i%5)]);
+UPDATE transfers SET created_at=now() - ((80-i)||' hours')::interval WHERE id=i;
+END LOOP; END $$;
+INSERT INTO loans(customer_id,kind,principal,rate,months,status) VALUES(1,'Home loan',4500000,8.5,240,'Active'),(3,'Business loan',1200000,11.25,60,'Active'),(4,'Vehicle loan',850000,9.2,60,'Active'),(5,'Education loan',600000,7.5,84,'Pending'),(8,'Business loan',2000000,10.5,72,'Pending');
+
+
+-- Login schema
+
+CREATE TABLE IF NOT EXISTS app_users (
+ id SERIAL PRIMARY KEY,
+ name TEXT NOT NULL,
+ email TEXT NOT NULL UNIQUE,
+ password_hash TEXT NOT NULL,
+ role TEXT NOT NULL CHECK(role IN ('customer','employee','admin')),
+ customer_id INTEGER UNIQUE REFERENCES customers(id),
+ CHECK ((role='customer' AND customer_id IS NOT NULL) OR (role<>'customer' AND customer_id IS NULL))
+);
+CREATE TABLE IF NOT EXISTS app_sessions (
+ token_hash TEXT PRIMARY KEY,
+ user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+ expires_at TIMESTAMPTZ NOT NULL,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE loans DROP CONSTRAINT IF EXISTS loans_status_check;
+ALTER TABLE loans ADD CONSTRAINT loans_status_check CHECK(status IN ('Active','Pending','Closed','Rejected'));
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS reviewed_by INTEGER REFERENCES app_users(id);
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON app_sessions(expires_at);
+
+
+-- Banking reports
+
+-- Customer wealth ranking
+WITH wealth AS (SELECT c.id,c.name,sum(a.balance) AS deposits FROM customers c JOIN accounts a ON a.customer_id=c.id GROUP BY c.id,c.name) SELECT *,dense_rank() OVER(ORDER BY deposits DESC) AS rank FROM wealth ORDER BY rank;
+
+-- Above-average balances
+SELECT a.number,c.name,a.balance FROM accounts a JOIN customers c ON c.id=a.customer_id WHERE a.balance>(SELECT avg(balance) FROM accounts) ORDER BY a.balance DESC;
+
+-- Branch hierarchy
+WITH RECURSIVE tree AS (SELECT id,name,parent_id,0 AS depth,name AS path FROM branches WHERE parent_id IS NULL UNION ALL SELECT b.id,b.name,b.parent_id,t.depth+1,t.path||' → '||b.name FROM branches b JOIN tree t ON b.parent_id=t.id) SELECT * FROM tree ORDER BY path;
+
+-- Daily transfer volume
+WITH daily AS (SELECT created_at::date AS day,count(*) AS transfers,sum(amount) AS volume FROM transfers GROUP BY 1) SELECT *,sum(volume) OVER(ORDER BY day) AS cumulative_volume FROM daily ORDER BY day;
+
+-- Most recent transfer per account
+WITH ranked AS (SELECT a.number,t.amount,t.narration,t.created_at,row_number() OVER(PARTITION BY a.id ORDER BY t.created_at DESC,t.id DESC) AS rn FROM accounts a JOIN transfers t ON t.from_account=a.id) SELECT * FROM ranked WHERE rn=1 ORDER BY number;
+
+-- Loan exposure & EMI
+SELECT c.name,l.kind,l.principal,l.rate,monthly_emi(l.principal,l.rate,l.months) AS monthly_payment FROM loans l JOIN customers c ON c.id=l.customer_id ORDER BY principal DESC;
+
+-- Flexible KYC documents
+SELECT name,kyc->>'occupation' AS occupation,kyc->>'risk' AS risk,kyc FROM customers WHERE kyc @> '{"verified":true}'::jsonb ORDER BY name;
+
+-- CLI privileges
+
+-- Run as bank_admin in full PostgreSQL, NOT embedded PGlite.
+CREATE ROLE bank_auditor NOLOGIN;
+CREATE ROLE bank_teller NOLOGIN;
+GRANT USAGE ON SCHEMA public TO bank_auditor, bank_teller;
+GRANT SELECT ON customers,accounts,branches,transfers,loans,audit_log TO bank_auditor;
+GRANT SELECT ON customers,accounts,branches,transfers TO bank_teller;
+-- Invoker rights: teller needs these underlying privileges to execute the function.
+GRANT UPDATE(balance) ON accounts TO bank_teller;
+GRANT INSERT ON transfers,audit_log TO bank_teller;
+GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO bank_teller;
+REVOKE EXECUTE ON FUNCTION transfer_funds(INTEGER,INTEGER,NUMERIC,TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION transfer_funds(INTEGER,INTEGER,NUMERIC,TEXT) TO bank_teller;
+-- Demonstrate authorization independently of the UI.
+SET ROLE bank_auditor;
+SELECT number,balance FROM accounts;
+-- Expected ERROR: permission denied for table accounts
+UPDATE accounts SET balance=balance+1 WHERE id=1;
+RESET ROLE;
+SET ROLE bank_teller;
+SELECT transfer_funds(1,2,100.00,'CLI teller demo');
+-- Expected ERROR: permission denied for table customers
+DELETE FROM customers WHERE id=8;
+RESET ROLE;

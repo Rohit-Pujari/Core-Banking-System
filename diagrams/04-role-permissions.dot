@@ -1,0 +1,19 @@
+digraph G { graph [rankdir=LR, bgcolor="#ffffff", pad="0.5", nodesep="0.55", ranksep="1.0", fontname="DejaVu Sans", fontsize=18]; node [shape=box, style="rounded,filled", fillcolor="#edf5ef", color="#a8c4b0", fontname="DejaVu Sans", fontsize=12, margin="0.2,0.15"]; edge [color="#597766", fontname="DejaVu Sans", fontsize=10, arrowsize=0.8];
+graph [label="Vault — Application roles",labelloc=t];
+c [label="Customer"]; e [label="Employee"]; a [label="Administrator"];
+personal [label="Own accounts, balances and transfers
+Send from owned accounts
+Apply for loans • View own KYC"];
+operations [label="Onboard customers • Verify KYC
+Open accounts • Freeze / reactivate
+Assist with internal transfers
+View bank records and loan applications"];
+oversight [label="Approve / reject pending loans
+Create employee logins
+View balance audit
+Run banking reports"];
+note [label="Permissions enforced by API session and role checks.
+Database CLI auditor/teller roles are a separate demonstration.",fillcolor="#fff5df"];
+c -> personal;e -> operations;a -> operations;a -> oversight;
+
+}
