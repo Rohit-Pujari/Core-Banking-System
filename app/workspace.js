@@ -197,7 +197,12 @@ export default function Bank() {
               status: a.status === 'Active' ? 'Frozen' : 'Active'
             })}>{a.status === 'Active' ? 'Freeze' : 'Reactivate'}</button>, ...(user.role === 'admin' ? [
               Number(a.balance) !== 0
-                ? <span key="delete" className="muted">Requires ₹0 balance</span>
+                ? a.status === 'Frozen' ? <span key="close" className="muted">Reactivate to close</span> :
+                  <button key="close" className="row-action danger" disabled={busy} onClick={() => {
+                    if (window.confirm('Confirm that ' + money(a.balance) + ' has been paid in cash to ' + a.name + '. Close account ' + a.number + ' and remove it from the directory?')) {
+                      act('account-close', {id: a.id, confirmed_balance: a.balance});
+                    }
+                  }}>Close &amp; pay out</button>
                 : <button key="delete" className="row-action danger" disabled={busy} onClick={() => {
                 if (window.confirm('Delete account ' + a.number + ' for ' + a.name + '? Pending loans will need another receiving account.')) {
                   act('account-delete', { id: a.id });

@@ -38,7 +38,7 @@ export async function GET(request) {
         user
       };
     const sqls = {
-      accounts: `SELECT a.*,c.name,b.name AS branch FROM accounts a JOIN customers c ON c.id=a.customer_id JOIN branches b ON b.id=a.branch_id ${customer ? 'WHERE a.customer_id=?' : ''} ORDER BY a.id`,
+      accounts: `SELECT a.*,c.name,b.name AS branch FROM accounts a JOIN customers c ON c.id=a.customer_id JOIN branches b ON b.id=a.branch_id WHERE a.status<>'Closed' ${customer ? 'AND a.customer_id=?' : ''} ORDER BY a.id`,
       customers: `SELECT * FROM customers ${customer ? 'WHERE id=?' : ''} ORDER BY id`,
       transfers: `SELECT t.*,s.number AS source,d.number AS destination,c.name FROM transfers t JOIN accounts s ON s.id=t.from_account JOIN accounts d ON d.id=t.to_account JOIN customers c ON c.id=s.customer_id ${customer ? 'WHERE s.customer_id=? OR d.customer_id=?' : ''} ORDER BY t.created_at DESC,t.id DESC LIMIT 100`,
       loans: `SELECT l.*,CASE WHEN l.status='Closed' THEN 0 ELSE l.principal-l.amount_paid END AS remaining,c.name,a.number AS account_number,monthly_emi(principal,rate,months) AS emi FROM loans l JOIN customers c ON c.id=l.customer_id LEFT JOIN accounts a ON a.id=l.account_id ${customer ? 'WHERE l.customer_id=?' : ''} ORDER BY l.id`
@@ -181,6 +181,19 @@ export async function POST(request) {
       return reply({
         message: 'Customer KYC verified.'
       });
+    }
+    if (b.action === 'account-close') {
+      admin(user);
+      const accountId = id(b.id);
+      const amount = String(b.confirmed_balance);
+      if (!/^\d{1,14}(\.\d{1,2})?$/.test(amount) || Number(amount) <= 0) throw new HttpError('Confirm the current payout amount.');
+      await db.transaction(async tx => {
+        // The balance predicate prevents a stale confirmation or duplicate payout.
+        const closed = await tx.query("UPDATE accounts SET balance=0,status='Closed' WHERE id=? AND status='Active' AND balance=CAST(? AS DECIMAL(16,2))", [accountId, amount]);
+        if (!closed.affectedRows) throw new HttpError('Account balance or status changed. Refresh before closing.', 409);
+        await tx.query("UPDATE loans SET account_id=NULL WHERE account_id=? AND status='Pending'", [accountId]);
+      });
+      return reply({message: 'Closing cash payout of ₹' + amount + ' recorded. Account closed.'});
     }
     if (b.action === 'account-delete') {
       admin(user);

@@ -116,6 +116,8 @@ A successful transfer creates one `transfers` row and normally two `audit_log` r
 
 **Repayment.** In My loans, choose Make payment, select an active account and enter a partial amount or use the full payoff amount. MySQL debits the account and updates `loans.amount_paid` in one transaction. Paying the remaining principal closes the loan. Interest is shown as an EMI estimate only. The balance trigger records the account debit.
 
+**Closing a funded account.** In Admin → Accounts, use Close & pay out after paying the displayed balance to the customer in cash. Confirmation records the final debit in the balance audit and removes the closed account from the directory. Past transfers and loans remain linked to its account number. Pending applications can use another account at approval.
+
 ## Evaluator commands
 
 A customer uploads their KYC PDF from My profile. MongoDB stores the file under the MySQL customer ID. Staff download it from Customers and record the verification decision in MySQL.
