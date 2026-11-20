@@ -182,6 +182,17 @@ export async function POST(request) {
         message: 'Customer KYC verified.'
       });
     }
+    if (b.action === 'account-delete') {
+      admin(user);
+      try {
+        const result = await db.query('DELETE FROM accounts WHERE id=? AND balance=0', [id(b.id)]);
+        if (!result.affectedRows) throw new HttpError('Account not found or its balance is not zero.');
+      } catch (error) {
+        if (error.errno === 1451) throw new HttpError('This account has financial history and must be retained.', 409);
+        throw error;
+      }
+      return reply({message: 'Account deleted.'});
+    }
     if (b.action === 'account-status') {
       staff(user);
       if (!['Active', 'Frozen'].includes(b.status)) throw new HttpError('Invalid account status.');

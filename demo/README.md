@@ -68,11 +68,12 @@ For a five-minute SQL demo, run queries 1–5 at the MySQL prompt. Add query 8 i
 bank < demo/03-function-trigger.sql
 ```
 
-The [demo SQL](03-function-trigger.sql) contains all three complete CREATE statements. Run `cat demo/03-function-trigger.sql` to read them or use the command above to execute them in MySQL 8.4. The IF NOT EXISTS clauses keep installed definitions intact.
+The [demo SQL](03-function-trigger.sql) contains all four complete CREATE statements. Run `cat demo/03-function-trigger.sql` to read them or use the command above to execute them in MySQL 8.4. The IF NOT EXISTS clauses keep installed definitions intact.
 
 | Object | Type | App feature |
 |---|---|---|
 | `transfer_funds` | Stored function | Send money locks the accounts, moves the amount and returns the transfer ID. |
+| `account_delete_cleanup` | BEFORE DELETE trigger | Admin → Accounts → Delete clears the receiving account on pending loans. The borrower and application remain. Funded accounts and accounts with financial history are protected. |
 | `balance_audit` | AFTER UPDATE trigger | A changed balance writes its old and new values to the audit log during transfers, deposits, loan payouts and repayments. |
 | `monthly_emi` | Stored function | Loan screens and the staff EMI report calculate the monthly instalment estimate. |
 

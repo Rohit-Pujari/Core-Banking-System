@@ -188,14 +188,20 @@ export default function Bank() {
  <section className="panel"><div className="panel-heading"><div><h2>Recent transactions</h2><p>The latest movements across your accounts</p></div><button className="text-button" onClick={() => go('Transactions')}>View all transactions <ArrowUpRight size={16} /></button></div><Transfers rows={data.transfers.slice(0, 5)} /></section><div className="bottom-note"><ShieldCheck size={14} /> Amounts in INR · Demo data</div></>}
  {['Customers', 'Accounts', 'Transactions', 'Loans', 'Audit trail'].includes(page) && <section className="panel"><div className="panel-heading"><div><h2>{page === 'Audit trail' ? 'Balance change log' : page + ' directory'}</h2><p>{page === 'Audit trail' ? 'Created by the balance_audit trigger, including seeded transfers.' : 'Search and review your bank records'}</p></div><label className="search"><Search size={16} /><input aria-label={'Search ' + page} placeholder="Search records…" value={filter} onChange={e => setFilter(e.target.value)} /></label></div>
  {page === 'Transactions' && <Transfers rows={data.transfers.filter(matches)} />}
- {page === 'Accounts' && <Table headers={['Account / Holder', 'Type', 'Branch', 'Balance', 'Status', 'Cash deposit', 'Action']} rows={data.accounts.filter(matches).map(a => [<Person key={a.id} name={a.name} sub={a.number} />, a.kind, a.branch, <b key="balance">{money(a.balance)}</b>, <Badge key="status" text={a.status} />, <button key="deposit" className="row-action" disabled={busy || a.status !== 'Active'} onClick={() => {
+ {page === 'Accounts' && <Table headers={['Account / Holder', 'Type', 'Branch', 'Balance', 'Status', 'Cash deposit', 'Action', ...(user.role === 'admin' ? ['Delete'] : [])]} rows={data.accounts.filter(matches).map(a => [<Person key={a.id} name={a.name} sub={a.number} />, a.kind, a.branch, <b key="balance">{money(a.balance)}</b>, <Badge key="status" text={a.status} />, <button key="deposit" className="row-action" disabled={busy || a.status !== 'Active'} onClick={() => {
               setDepositAccount(a);
               setError('');
               setModal('deposit');
             }}>Deposit</button>, <button key="action" disabled={busy} className="row-action" onClick={() => act('account-status', {
               id: a.id,
               status: a.status === 'Active' ? 'Frozen' : 'Active'
-            })}>{a.status === 'Active' ? 'Freeze' : 'Reactivate'}</button>])} />}
+            })}>{a.status === 'Active' ? 'Freeze' : 'Reactivate'}</button>, ...(user.role === 'admin' ? [
+              <button key="delete" className="row-action danger" disabled={busy || Number(a.balance) !== 0} onClick={() => {
+                if (window.confirm('Delete account ' + a.number + ' for ' + a.name + '? Pending loans will need another receiving account.')) {
+                  act('account-delete', { id: a.id });
+                }
+              }}>Delete</button>
+            ] : [])])} />}
  {page === 'Customers' && reviewCustomer && <KycDocument key={reviewCustomer} customer={reviewCustomer} />}
  {page === 'Customers' && <Table headers={['Customer', 'Contact', 'Occupation', 'KYC', 'Risk', 'Document', 'Action']} rows={data.customers.filter(matches).map(c => [<Person key={c.id} name={c.name} sub={'CIF · ' + String(c.id).padStart(4, '0')} />, <div key="contact">{c.email}<small>{c.phone}</small></div>, c.kyc.occupation, <Badge key="kyc" text={c.kyc.verified ? 'Verified' : 'Pending'} />, c.kyc.risk, <button key="proof" className="row-action" onClick={() => setReviewCustomer(c.id)}>View proof</button>, c.kyc.verified ? '—' : <button key="verify" className="row-action" disabled={busy} onClick={() => act('kyc', {
               id: c.id
