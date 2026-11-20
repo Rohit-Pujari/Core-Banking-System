@@ -1,3 +1,4 @@
+import { needsLoanCredit } from '../../../lib/loan-status.mjs';
 import { getDb } from '../../../lib/db.mjs';
 import { queries } from '../../../lib/queries.mjs';
 import { requireUser, checkOrigin, HttpError, failure } from '../../../lib/auth.mjs';
@@ -126,23 +127,30 @@ export async function POST(request) {
         message: 'Loan application submitted. Your bank will review it.'
       });
     }
-    if (b.action === 'loan-review') {
+    if (b.action === 'loan-review' || b.action === 'loan-credit') {
       admin(user);
-      if (!['Active', 'Rejected'].includes(b.status)) throw new HttpError('Invalid review decision.');
+      const repair = b.action === 'loan-credit';
+      const decision = repair ? 'Active' : b.status;
+      if (!['Active', 'Rejected'].includes(decision)) throw new HttpError('Invalid review decision.');
       await db.transaction(async tx => {
         const loan = (await tx.query("SELECT * FROM loans WHERE id=? FOR UPDATE", [id(b.id)])).rows[0];
-        if (!loan || loan.status !== 'Pending') throw new HttpError('This loan is no longer pending.');
+        if (repair && (!loan || !needsLoanCredit(loan))) throw new HttpError('This loan is not awaiting a credit.');
+        if (!repair && (!loan || loan.status !== 'Pending')) throw new HttpError('This loan is no longer pending.');
         let accountId = loan.account_id;
-        if (b.status === 'Active') {
+        if (decision === 'Active') {
           // Older applications have no nominated account. Staff select one before approval.
           accountId ??= id(b.account_id);
           const credit = await tx.query("UPDATE accounts SET balance=balance+? WHERE id=? AND customer_id=? AND status='Active' AND balance<=99999999999999.99-?", [loan.principal, accountId, loan.customer_id, loan.principal]);
           if (!credit.affectedRows) throw new HttpError('The selected account cannot receive this loan. Approval was cancelled.');
         }
+        if (repair) {
+          await tx.query('UPDATE loans SET account_id=? WHERE id=?', [accountId, loan.id]);
+          return;
+        }
         await tx.query('UPDATE loans SET status=?,account_id=?,reviewed_by=?,reviewed_at=now() WHERE id=?', [b.status, accountId, user.id, loan.id]);
       });
       return reply({
-        message: b.status === 'Active' ? 'Loan approved and principal credited to the selected account.' : 'Loan rejected.'
+        message: decision === 'Active' ? 'Loan principal credited to the selected account.' : 'Loan rejected.'
       });
     }
     if (b.action === 'kyc') {

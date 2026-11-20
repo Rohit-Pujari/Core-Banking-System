@@ -112,7 +112,7 @@ If the sender had ₹500 and the receiver had ₹300, after the transfer they ha
 
 A successful transfer creates one `transfers` row and normally two `audit_log` rows. The function and trigger definitions are in [01-schema.sql](../sql/01-schema.sql). The API calls them from [the bank route](../app/api/bank/route.js).
 
-**Loan to receiving account.** The borrower selects an active account when applying. Approval locks the pending loan, credits its principal to that account, and records the admin decision in one MySQL transaction. The balance trigger records the credit. For an older pending loan, the admin selects the borrower’s receiving account before approval.
+**Loan to receiving account.** The borrower selects an active account when applying. Approval locks the pending loan, credits its principal to that account, and records the admin decision in one MySQL transaction. The balance trigger records the credit. For a loan approved by an admin before payouts were implemented, select the receiving account and choose **Credit approved loan**. The original reviewer and decision time are preserved. For an older pending loan, the admin selects the borrower’s receiving account before approval.
 
 ## Evaluator commands
 

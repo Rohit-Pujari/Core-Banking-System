@@ -1,5 +1,6 @@
 'use client';
 
+import { needsLoanCredit } from '../lib/loan-status.mjs';
 import KycDocument from './kyc-document';
 
 import { useEffect, useState, useRef } from 'react';
@@ -199,16 +200,16 @@ export default function Bank() {
  {page === 'Customers' && <Table headers={['Customer', 'Contact', 'Occupation', 'KYC', 'Risk', 'Document', 'Action']} rows={data.customers.filter(matches).map(c => [<Person key={c.id} name={c.name} sub={'CIF · ' + String(c.id).padStart(4, '0')} />, <div key="contact">{c.email}<small>{c.phone}</small></div>, c.kyc.occupation, <Badge key="kyc" text={c.kyc.verified ? 'Verified' : 'Pending'} />, c.kyc.risk, <button key="proof" className="row-action" onClick={() => setReviewCustomer(c.id)}>View proof</button>, c.kyc.verified ? '—' : <button key="verify" className="row-action" disabled={busy} onClick={() => act('kyc', {
               id: c.id
             })}>Verify KYC</button>])} />}
- {page === 'Loans' && <Table headers={['Borrower', 'Product', 'Receiving account', 'Principal', 'Rate', 'Monthly EMI', 'Status', ...(user.role === 'admin' ? ['Review'] : [])]} rows={data.loans.filter(matches).map(l => [l.name, l.kind, l.account_number || '—', money(l.principal), l.rate + '%', money(l.emi), <Badge key="status" text={l.status} />, ...(user.role === 'admin' ? [l.status === 'Pending' ? <div className="row-actions" key="review"><form onSubmit={e => {
+ {page === 'Loans' && <Table headers={['Borrower', 'Product', 'Receiving account', 'Principal', 'Rate', 'Monthly EMI', 'Status', ...(user.role === 'admin' ? ['Review'] : [])]} rows={data.loans.filter(matches).map(l => [l.name, l.kind, l.account_number || '—', money(l.principal), l.rate + '%', money(l.emi), <Badge key="status" text={l.status} />, ...(user.role === 'admin' ? [l.status === 'Pending' || needsLoanCredit(l) ? <div className="row-actions" key="review"><form onSubmit={e => {
                 e.preventDefault();
-                act('loan-review', { id: l.id, status: 'Active', account_id: new FormData(e.currentTarget).get('account_id') });
+                act(needsLoanCredit(l) ? 'loan-credit' : 'loan-review', { id: l.id, status: 'Active', account_id: new FormData(e.currentTarget).get('account_id') });
               }}>
                 {!l.account_id && <select name="account_id" aria-label="Receiving account" required defaultValue=""><option value="" disabled>Select receiving account</option>{data.accounts.filter(a => a.customer_id === l.customer_id && a.status === 'Active').map(a => <option key={a.id} value={a.id}>{a.number}</option>)}</select>}
-                <button disabled={busy} className="row-action">Approve &amp; credit</button>
-              </form><button disabled={busy} className="row-action danger" onClick={() => act('loan-review', {
+                <button disabled={busy} className="row-action">{needsLoanCredit(l) ? 'Credit approved loan' : 'Approve & credit'}</button>
+              </form>{l.status === 'Pending' && <button disabled={busy} className="row-action danger" onClick={() => act('loan-review', {
                 id: l.id,
                 status: 'Rejected'
-              })}>Reject</button></div> : '—'] : [])])} />}
+              })}>Reject</button>}</div> : '—'] : [])])} />}
  {page === 'Audit trail' && <Table headers={['Event', 'Account ID', 'Before', 'After', 'Change', 'Timestamp']} rows={data.audit.filter(matches).map(a => ['#' + a.id, a.account_id, money(a.old_balance), money(a.new_balance), money(Number(a.new_balance) - Number(a.old_balance)), new Date(a.created_at).toLocaleString('en-IN')])} />}
  </section>}
  {page === 'Team' && <section className="panel"><div className="panel-heading"><div><h2>Bank team</h2><p>Administrators and employees with access to bank operations</p></div></div><Table headers={['Name', 'Email', 'Role']} rows={data.users.filter(u => u.role !== 'customer').map(u => [u.name, u.email, u.role])} /></section>}
