@@ -58,6 +58,19 @@ export async function POST(request) {
     const user = await requireUser(request),
       db = await getDb(),
       b = await request.json();
+    if (b.action === 'deposit') {
+      staff(user);
+      const amount = String(b.amount);
+      if (!/^\d{1,12}(\.\d{1,2})?$/.test(amount) || Number(amount) <= 0) {
+        throw new HttpError('Enter a positive deposit amount with at most two decimals.');
+      }
+      const result = await db.query(
+        "UPDATE accounts SET balance=balance+CAST(? AS DECIMAL(16,2)) WHERE id=? AND status='Active' AND balance<=99999999999999.99-CAST(? AS DECIMAL(16,2))",
+        [amount, id(b.id), amount]
+      );
+      if (!result.affectedRows) throw new HttpError('Deposit requires an active account with room for this amount.');
+      return reply({ message: 'Cash deposit recorded.' });
+    }
     if (b.action === 'transfer') {
       if (!/^\d{1,12}(\.\d{1,2})?$/.test(String(b.amount)) || Number(b.amount) <= 0) throw new HttpError('Enter a positive amount with at most two decimals.');
       const source = id(b.from),

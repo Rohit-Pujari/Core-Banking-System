@@ -51,7 +51,7 @@ Money uses `NUMERIC(16,2)` so it can store exact decimal amounts, for example `1
 
 ## 5. How the tables connect
 
-Open the [Chen ER diagram](../diagrams/01-er-diagram.svg) or [diagram gallery](../diagrams/index.html). A rectangle is an entity/table, a diamond is a relationship, and an oval is an attribute/column. Underlined ovals are primary keys. Relationship labels show minimum and maximum participation: `(0,N)` means zero or many, `(1,1)` exactly one, and `(0,1)` optional one.
+Open the [Chen ER diagram](../diagrams/01-er-diagram.svg) or [relational schema](../diagrams/10-relational-schema.svg). A rectangle is an entity/table, a diamond is a relationship, and an oval is an attribute/column. Underlined ovals are primary keys. Relationship labels show minimum and maximum participation: `(0,N)` means zero or many, `(1,1)` exactly one, and `(0,1)` optional one.
 
 ```mermaid
 erDiagram
@@ -93,7 +93,7 @@ KYC is a **composite conceptual attribute**: the JSON object has `verified`, `oc
 
 EMI is a **derived attribute**. It is calculated from loan principal, rate, and term by `monthly_emi()`; the app does not store it as a loan column.
 
-The supplied reference image shows a **multivalued attribute** with a double oval. Chen notation also represents a **weak entity** with a double rectangle. This database has neither. A customer phone is one text value. All eight tables have their own primary key, so none is weak. The notation key shows the symbols, but the bank ER diagram does not pretend they are part of the schema. A weak entity would need an owner's key plus its own partial key for identification.
+The supplied reference image shows a **multivalued attribute** with a double oval. Chen notation also represents a **weak entity** with a double rectangle. This database has neither. A customer phone is one text value. All eight tables have their own primary key, so none is weak. A weak entity would need an owner's key plus its own partial key for identification.
 
 ## 6. What happens during a transfer?
 
@@ -113,6 +113,8 @@ If the sender had ₹500 and the receiver had ₹300, after the transfer they ha
 A successful transfer creates one `transfers` row and normally two `audit_log` rows. The function and trigger definitions are in [01-schema.sql](../sql/01-schema.sql). The API calls them from [the bank route](../app/api/bank/route.js).
 
 ## Evaluator commands
+
+A customer uploads their KYC PDF from My profile. MongoDB stores the file under the MySQL customer ID. Staff download it from Customers and record the verification decision in MySQL.
 
 Run the [five MySQL and MongoDB demos](../demo/README.md) for DDL/DML, reports, trigger, function, privileges and document queries.
 
@@ -143,7 +145,7 @@ The transfer updates two accounts; total bank balances stay the same. The API ch
 
 ### Employee screens
 
-The employee workspace shows bank records for servicing. In **Customers**, review customer details and verify a pending KYC status. In **Accounts**, open a Savings or Current account for a KYC-verified customer, or freeze/reactivate an account. New accounts start with a zero balance. **Reports** runs the supplied banking SQL. The employee cannot approve loans or create employee logins.
+The employee workspace shows bank records for servicing. In **Customers**, review customer details and verify a pending KYC status. In **Accounts**, open a Savings or Current account for a KYC-verified customer, or freeze/reactivate an account. New accounts start at ₹0. After receiving cash, choose **Accounts → Deposit**, enter the amount and confirm. MySQL credits the active account and the balance trigger records the old and new balances in the audit trail. **Reports** runs the supplied banking SQL. The employee cannot approve loans or create employee logins.
 
 ### Admin screens
 

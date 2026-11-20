@@ -1,5 +1,7 @@
 'use client';
 
+import KycDocument from './kyc-document';
+
 import { useEffect, useState, useRef } from 'react';
 import { Landmark, LayoutDashboard, Users, Wallet, ArrowLeftRight, HandCoins, Database, ShieldCheck, Search, ArrowUpRight, Plus, X, ChevronRight, RefreshCw, CheckCircle2 } from 'lucide-react';
 import Access from './access';
@@ -17,6 +19,8 @@ export default function Bank() {
   const sessionGeneration = useRef(0);
   const [user, setUser] = useState(null),
     [checking, setChecking] = useState(true);
+  const [depositAccount, setDepositAccount] = useState(null);
+  const [reviewCustomer, setReviewCustomer] = useState(null);
   const [page, setPage] = useState('Overview'),
     [data, setData] = useState(null),
     [filter, setFilter] = useState(''),
@@ -183,11 +187,16 @@ export default function Bank() {
  <section className="panel"><div className="panel-heading"><div><h2>Recent transactions</h2><p>The latest movements across your accounts</p></div><button className="text-button" onClick={() => go('Transactions')}>View all transactions <ArrowUpRight size={16} /></button></div><Transfers rows={data.transfers.slice(0, 5)} /></section><div className="bottom-note"><ShieldCheck size={14} /> Amounts in INR · Demo data</div></>}
  {['Customers', 'Accounts', 'Transactions', 'Loans', 'Audit trail'].includes(page) && <section className="panel"><div className="panel-heading"><div><h2>{page === 'Audit trail' ? 'Balance change log' : page + ' directory'}</h2><p>{page === 'Audit trail' ? 'Created by the balance_audit trigger, including seeded transfers.' : 'Search and review your bank records'}</p></div><label className="search"><Search size={16} /><input aria-label={'Search ' + page} placeholder="Search records…" value={filter} onChange={e => setFilter(e.target.value)} /></label></div>
  {page === 'Transactions' && <Transfers rows={data.transfers.filter(matches)} />}
- {page === 'Accounts' && <Table headers={['Account / Holder', 'Type', 'Branch', 'Balance', 'Status', 'Action']} rows={data.accounts.filter(matches).map(a => [<Person key={a.id} name={a.name} sub={a.number} />, a.kind, a.branch, <b key="balance">{money(a.balance)}</b>, <Badge key="status" text={a.status} />, <button key="action" disabled={busy} className="row-action" onClick={() => act('account-status', {
+ {page === 'Accounts' && <Table headers={['Account / Holder', 'Type', 'Branch', 'Balance', 'Status', 'Cash deposit', 'Action']} rows={data.accounts.filter(matches).map(a => [<Person key={a.id} name={a.name} sub={a.number} />, a.kind, a.branch, <b key="balance">{money(a.balance)}</b>, <Badge key="status" text={a.status} />, <button key="deposit" className="row-action" disabled={busy || a.status !== 'Active'} onClick={() => {
+              setDepositAccount(a);
+              setError('');
+              setModal('deposit');
+            }}>Deposit</button>, <button key="action" disabled={busy} className="row-action" onClick={() => act('account-status', {
               id: a.id,
               status: a.status === 'Active' ? 'Frozen' : 'Active'
             })}>{a.status === 'Active' ? 'Freeze' : 'Reactivate'}</button>])} />}
- {page === 'Customers' && <Table headers={['Customer', 'Contact', 'Occupation', 'KYC', 'Risk', 'Action']} rows={data.customers.filter(matches).map(c => [<Person key={c.id} name={c.name} sub={'CIF · ' + String(c.id).padStart(4, '0')} />, <div key="contact">{c.email}<small>{c.phone}</small></div>, c.kyc.occupation, <Badge key="kyc" text={c.kyc.verified ? 'Verified' : 'Pending'} />, c.kyc.risk, c.kyc.verified ? '—' : <button key="verify" className="row-action" disabled={busy} onClick={() => act('kyc', {
+ {page === 'Customers' && reviewCustomer && <KycDocument key={reviewCustomer} customer={reviewCustomer} />}
+ {page === 'Customers' && <Table headers={['Customer', 'Contact', 'Occupation', 'KYC', 'Risk', 'Document', 'Action']} rows={data.customers.filter(matches).map(c => [<Person key={c.id} name={c.name} sub={'CIF · ' + String(c.id).padStart(4, '0')} />, <div key="contact">{c.email}<small>{c.phone}</small></div>, c.kyc.occupation, <Badge key="kyc" text={c.kyc.verified ? 'Verified' : 'Pending'} />, c.kyc.risk, <button key="proof" className="row-action" onClick={() => setReviewCustomer(c.id)}>View proof</button>, c.kyc.verified ? '—' : <button key="verify" className="row-action" disabled={busy} onClick={() => act('kyc', {
               id: c.id
             })}>Verify KYC</button>])} />}
  {page === 'Loans' && <Table headers={['Borrower', 'Product', 'Principal', 'Rate', 'Monthly EMI', 'Status', ...(user.role === 'admin' ? ['Review'] : [])]} rows={data.loans.filter(matches).map(l => [l.name, l.kind, money(l.principal), l.rate + '%', money(l.emi), <Badge key="status" text={l.status} />, ...(user.role === 'admin' ? [l.status === 'Pending' ? <div className="row-actions" key="review"><button disabled={busy} className="row-action" onClick={() => act('loan-review', {
@@ -206,6 +215,6 @@ export default function Bank() {
                 }}>{queries.map((q, i) => <option key={q.title} value={i}>{q.title}</option>)}</select><button className="button primary" disabled={busy} onClick={run}>Load report</button></div></div>{rows ? <RawTable rows={rows} /> : <div className="empty">Select a report to view its results.</div>}</section>}
  </>}
  </main><footer><span>vault. <span className="muted">/ Core Banking System</span></span><span>Vault Bank <span className="footer-dot">●</span> Staff portal</span></footer></div>
- {modal && data && <BankingModal action={modal} data={data} error={error} busy={busy} onClose={() => setModal(null)} onSubmit={submit} />}
+ {modal && data && <BankingModal depositAccount={depositAccount} action={modal} data={data} error={error} busy={busy} onClose={() => setModal(null)} onSubmit={submit} />}
  </div>;
 }

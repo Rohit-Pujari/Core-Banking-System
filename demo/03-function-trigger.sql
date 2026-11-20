@@ -1,5 +1,7 @@
-SHOW CREATE FUNCTION transfer_funds;
-SHOW CREATE TRIGGER balance_audit;
+-- Read demo/03-definitions.sql for the complete CREATE statements.
+SHOW CREATE FUNCTION transfer_funds\G
+SHOW CREATE TRIGGER balance_audit\G
+SHOW CREATE FUNCTION monthly_emi\G
 
 START TRANSACTION;
 SELECT number, balance FROM accounts WHERE id IN (1, 2) ORDER BY id;

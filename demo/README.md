@@ -68,6 +68,8 @@ For a five-minute SQL demo, run queries 1–5 at the MySQL prompt. Add query 8 i
 bank < demo/03-function-trigger.sql
 ```
 
+Open [03-definitions.sql](03-definitions.sql) for the complete executable CREATE statements. From Bash, run `cat demo/03-definitions.sql` to display the source. Setup already installs these routines. The demonstration above prints the installed definitions vertically, then runs the transfer. In the app, pressing Send calls the bank API, which checks ownership and calls `transfer_funds` inside a transaction. The function locks the two accounts in ID order, checks funds, updates the balances and inserts the payment. MySQL calls the trigger once per updated row. Inside it, `OLD.balance` and `NEW.balance` are the values before and after that update. The other function, `monthly_emi`, calculates the instalment shown with each loan.
+
 Use seeded accounts 1 and 2 while both are active and account 1 has at least ₹100. Read the balances, call transfer_funds and compare the balances again. One falls by ₹100 and the other rises by ₹100. The balance_audit trigger writes two audit rows automatically. ROLLBACK restores the balances for another rehearsal.
 
 ## 4. Demonstrate database privileges
@@ -101,5 +103,9 @@ exit
 ```bash
 docker compose exec -T mongo mongosh vault_documents --quiet --file /dev/stdin < demo/05-nosql.js
 ```
+
+**Live KYC upload.** Sign in as a customer, open My profile, and upload a sample PDF (up to 2 MB). In Customers, an employee or admin selects View proof to download it and can then use Verify KYC. MongoDB stores the PDF bytes and metadata in `vault_documents.kyc_uploads`. Its document key is the MySQL customer ID. A second upload replaces that customer’s file. MySQL stores the verification decision. Uploading a file leaves that decision unchanged. The first query in the shell demo shows the uploaded file sizes and timestamps.
+
+In the MongoDB database `vault_documents`, the `kyc_documents` collection stores one document per customer. Aarav’s document contains two identity records (PAN and address proof), while Kabir’s contains one pending Student ID. The second collection, `knowledge`, holds short bank policy documents. Its text index lets you find policies containing “loan”.
 
 This covers the evaluator’s NoSQL option using independently seeded KYC documents. The nested filter finds Kabir’s pending Student ID. The aggregation expands each document array and counts three verified documents and one pending document on fresh data. The last query searches the text index for loan policies. To type each command yourself, open `docker compose exec mongo mongosh vault_documents`. Type `exit` when finished.

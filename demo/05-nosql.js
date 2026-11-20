@@ -1,3 +1,6 @@
+// Live app uploads: show customer ID, timestamp and size.
+printjson(db.kyc_uploads.find({}, {uploaded_at: 1, size: 1}).toArray());
+
 // Find the customer with a pending identity document.
 printjson(db.kyc_documents.find({'documents.status': 'pending'}, {_id: 0, name: 1, documents: 1}).toArray());
 

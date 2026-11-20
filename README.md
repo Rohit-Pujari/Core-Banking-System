@@ -36,7 +36,7 @@ Customers view balances, make internal transfers and apply for loans. Staff mana
 
 Eight application tables store the data. Staff Reports use CTEs, recursive queries, subqueries and window functions. The overview chart uses SQL daily totals; the branch list uses a recursive CTE. Transfers use a stored function and automatic audit trigger.
 
-See the [project diagrams](diagrams/index.html) for relationships and workflows.
+Use the [ER diagram](diagrams/01-er-diagram.svg) to explain relationships and the [relational schema](diagrams/10-relational-schema.svg) to show the MySQL keys.
 
 
 With the Compose MySQL server running, use `npm test` to run integration tests in disposable databases.

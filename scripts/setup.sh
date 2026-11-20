@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -eu
-docker compose up -d --wait mysql
+docker compose up -d --wait mysql mongo
 bank() { docker compose exec -T mysql mysql -ubank_admin -pbank_demo vault "$@"; }
 if [ "$(bank -Ns -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='vault'")" = 0 ]; then
   bank < sql/01-schema.sql

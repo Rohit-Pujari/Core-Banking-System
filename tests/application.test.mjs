@@ -88,7 +88,7 @@ test('Application sessions, ownership and customer/employee/admin workflows', as
       destination: 'VB10001',
       amount: '1'
     }, aarav)).status, 400);
-    for (const action of ['customer', 'employee', 'account', 'account-status', 'loan-review', 'kyc']) assert.equal((await call({
+    for (const action of ['deposit', 'customer', 'employee', 'account', 'account-status', 'loan-review', 'kyc']) assert.equal((await call({
       action,
       id: 1,
       status: 'Active'
@@ -106,6 +106,11 @@ test('Application sessions, ownership and customer/employee/admin workflows', as
       branch_id: 2,
       kind: 'Savings'
     }, employee)).status, 200);
+    const opened = (await db.query('SELECT id,balance FROM accounts WHERE customer_id=5 ORDER BY id DESC LIMIT 1')).rows[0];
+    assert.equal(Number(opened.balance), 0);
+    assert.equal((await call({ action: 'deposit', id: opened.id, amount: '500.25' }, employee)).status, 200);
+    const audit = (await db.query('SELECT old_balance,new_balance FROM audit_log WHERE account_id=? ORDER BY id DESC LIMIT 1', [opened.id])).rows[0];
+    assert.deepEqual([Number(audit.old_balance), Number(audit.new_balance)], [0, 500.25]);
     assert.equal((await call({
       action: 'account-status',
       id: 1,

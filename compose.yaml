@@ -16,6 +16,8 @@ services:
       interval: 3s
       retries: 40
   mongo:
+    ports:
+      - "127.0.0.1:27018:27017"
     image: mongo:8
     volumes:
       - mongo_data:/data/db
