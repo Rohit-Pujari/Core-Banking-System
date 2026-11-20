@@ -196,7 +196,9 @@ export default function Bank() {
               id: a.id,
               status: a.status === 'Active' ? 'Frozen' : 'Active'
             })}>{a.status === 'Active' ? 'Freeze' : 'Reactivate'}</button>, ...(user.role === 'admin' ? [
-              <button key="delete" className="row-action danger" disabled={busy || Number(a.balance) !== 0} onClick={() => {
+              Number(a.balance) !== 0
+                ? <span key="delete" className="muted">Requires ₹0 balance</span>
+                : <button key="delete" className="row-action danger" disabled={busy} onClick={() => {
                 if (window.confirm('Delete account ' + a.number + ' for ' + a.name + '? Pending loans will need another receiving account.')) {
                   act('account-delete', { id: a.id });
                 }
