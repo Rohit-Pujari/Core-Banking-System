@@ -1,5 +1,6 @@
 # Vault — Core Bank Management System
 
+For the evaluator, start with the [five terminal demonstrations](demo/README.md).
 A Next.js banking application for customers, employees and administrators, with PostgreSQL persistence and DBMS presentation tools.
 
 Read the [from-scratch DBMS guide](docs/DBMS_FROM_SCRATCH.md) for the tables, relationships and banking workflows.

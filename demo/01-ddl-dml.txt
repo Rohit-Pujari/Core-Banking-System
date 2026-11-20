@@ -1,0 +1,82 @@
+-- Build a disposable copy of the bank inside this transaction.
+BEGIN;
+CREATE SCHEMA vault_class_rehearsal;
+SET LOCAL search_path = vault_class_rehearsal;
+CREATE TABLE IF NOT EXISTS branches(id SERIAL PRIMARY KEY, name TEXT NOT NULL, city TEXT NOT NULL, parent_id INTEGER REFERENCES branches(id));
+CREATE TABLE IF NOT EXISTS customers(id SERIAL PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL, phone TEXT NOT NULL, kyc JSONB NOT NULL DEFAULT '{}', created_at TIMESTAMPTZ DEFAULT now());
+CREATE TABLE IF NOT EXISTS accounts(id SERIAL PRIMARY KEY, number TEXT UNIQUE NOT NULL, customer_id INTEGER NOT NULL REFERENCES customers(id), branch_id INTEGER NOT NULL REFERENCES branches(id), kind TEXT NOT NULL CHECK(kind IN ('Savings','Current')), balance NUMERIC(16,2) NOT NULL DEFAULT 0 CHECK(balance>=0), status TEXT NOT NULL DEFAULT 'Active' CHECK(status IN ('Active','Frozen','Closed')));
+CREATE TABLE IF NOT EXISTS transfers(id SERIAL PRIMARY KEY, from_account INTEGER NOT NULL REFERENCES accounts(id), to_account INTEGER NOT NULL REFERENCES accounts(id), amount NUMERIC(16,2) NOT NULL CHECK(amount>0), narration TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), CHECK(from_account<>to_account));
+CREATE INDEX IF NOT EXISTS transfers_date_idx ON transfers(created_at);
+CREATE TABLE IF NOT EXISTS audit_log(id SERIAL PRIMARY KEY, account_id INTEGER NOT NULL REFERENCES accounts(id), old_balance NUMERIC(16,2), new_balance NUMERIC(16,2), actor TEXT DEFAULT current_user, created_at TIMESTAMPTZ DEFAULT now());
+CREATE TABLE IF NOT EXISTS loans(id SERIAL PRIMARY KEY, customer_id INTEGER NOT NULL REFERENCES customers(id), kind TEXT NOT NULL, principal NUMERIC(16,2) NOT NULL CHECK(principal>0), rate NUMERIC(5,2) NOT NULL, months INTEGER NOT NULL CHECK(months>0), status TEXT NOT NULL CHECK(status IN ('Active','Pending','Closed')));
+CREATE OR REPLACE FUNCTION audit_balance() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF OLD.balance IS DISTINCT FROM NEW.balance THEN
+ INSERT INTO audit_log(account_id,old_balance,new_balance) VALUES(NEW.id,OLD.balance,NEW.balance);
+ END IF;
+ RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS balance_audit ON accounts;
+CREATE TRIGGER balance_audit AFTER UPDATE OF balance ON accounts FOR EACH ROW EXECUTE FUNCTION audit_balance();
+CREATE OR REPLACE FUNCTION transfer_funds(source_id INTEGER, destination_id INTEGER, value NUMERIC, note TEXT) RETURNS INTEGER LANGUAGE plpgsql AS $$
+DECLARE transfer_id INTEGER;
+BEGIN
+ IF value IS NULL OR value<=0 OR value<>round(value,2) OR source_id=destination_id THEN RAISE EXCEPTION 'Enter a positive amount with at most two decimals and distinct accounts'; END IF;
+ -- Consistent lock ordering prevents deadlocks between opposing transfers.
+ PERFORM id FROM accounts WHERE id IN(source_id,destination_id) ORDER BY id FOR UPDATE;
+ IF (SELECT count(*) FROM accounts WHERE id IN(source_id,destination_id) AND status='Active')<>2 THEN RAISE EXCEPTION 'Both accounts must exist and be active'; END IF;
+ IF (SELECT balance FROM accounts WHERE id=source_id)<value THEN RAISE EXCEPTION 'Insufficient funds'; END IF;
+ UPDATE accounts SET balance=balance-value WHERE id=source_id;
+ UPDATE accounts SET balance=balance+value WHERE id=destination_id;
+ INSERT INTO transfers(from_account,to_account,amount,narration) VALUES(source_id,destination_id,value,coalesce(nullif(trim(note),''),'Account transfer')) RETURNING id INTO transfer_id;
+ RETURN transfer_id;
+END $$;
+CREATE OR REPLACE FUNCTION monthly_emi(p NUMERIC,r NUMERIC,n INTEGER) RETURNS NUMERIC LANGUAGE SQL IMMUTABLE AS $$
+ SELECT round(CASE WHEN r=0 THEN p/n ELSE p*(r/1200)*power(1+r/1200,n)/(power(1+r/1200,n)-1) END,2);
+$$;
+CREATE TABLE IF NOT EXISTS app_users (
+ id SERIAL PRIMARY KEY,
+ name TEXT NOT NULL,
+ email TEXT NOT NULL UNIQUE,
+ password_hash TEXT NOT NULL,
+ role TEXT NOT NULL CHECK(role IN ('customer','employee','admin')),
+ customer_id INTEGER UNIQUE REFERENCES customers(id),
+ CHECK ((role='customer' AND customer_id IS NOT NULL) OR (role<>'customer' AND customer_id IS NULL))
+);
+CREATE TABLE IF NOT EXISTS app_sessions (
+ token_hash TEXT PRIMARY KEY,
+ user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+ expires_at TIMESTAMPTZ NOT NULL,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE loans DROP CONSTRAINT IF EXISTS loans_status_check;
+ALTER TABLE loans ADD CONSTRAINT loans_status_check CHECK(status IN ('Active','Pending','Closed','Rejected'));
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS reviewed_by INTEGER REFERENCES app_users(id);
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON app_sessions(expires_at);
+INSERT INTO branches(name,city,parent_id) VALUES ('Head Office','Bengaluru',NULL),('Indiranagar','Bengaluru',1),('Koramangala','Bengaluru',1),('Jayanagar','Bengaluru',1);
+INSERT INTO customers(name,email,phone,kyc) VALUES
+('Aarav Sharma','aarav@example.com','9876501001','{"verified":true,"occupation":"Engineer","risk":"low"}'),
+('Diya Patel','diya@example.com','9876501002','{"verified":true,"occupation":"Designer","risk":"low"}'),
+('Arjun Rao','arjun@example.com','9876501003','{"verified":true,"occupation":"Business owner","risk":"medium"}'),
+('Ananya Iyer','ananya@example.com','9876501004','{"verified":true,"occupation":"Doctor","risk":"low"}'),
+('Kabir Mehta','kabir@example.com','9876501005','{"verified":false,"occupation":"Student","risk":"medium"}'),
+('Ishita Nair','ishita@example.com','9876501006','{"verified":true,"occupation":"Architect","risk":"low"}'),
+('Rohan Das','rohan@example.com','9876501007','{"verified":true,"occupation":"Consultant","risk":"low"}'),
+('Meera Reddy','meera@example.com','9876501008','{"verified":true,"occupation":"Entrepreneur","risk":"medium"}');
+INSERT INTO accounts(number,customer_id,branch_id,kind,balance,status) SELECT 'VB1000'||id,id,1+(id%4),CASE WHEN id%3=0 THEN 'Current' ELSE 'Savings' END,75000+id*42000,'Active' FROM customers;
+INSERT INTO accounts(number,customer_id,branch_id,kind,balance,status) VALUES('VB10009',1,2,'Current',450000,'Active'),('VB100010',5,3,'Savings',25000,'Frozen');
+DO $$ DECLARE i INTEGER; BEGIN FOR i IN 1..80 LOOP
+PERFORM transfer_funds(1+(i%8),1+((i+1)%8),(500+(i*317)%12000)::numeric, (ARRAY['Vendor payment','Monthly rent','Consulting fee','Family transfer','Invoice settlement'])[1+(i%5)]);
+UPDATE transfers SET created_at=now() - ((80-i)||' hours')::interval WHERE id=i;
+END LOOP; END $$;
+INSERT INTO loans(customer_id,kind,principal,rate,months,status) VALUES(1,'Home loan',4500000,8.5,240,'Active'),(3,'Business loan',1200000,11.25,60,'Active'),(4,'Vehicle loan',850000,9.2,60,'Active'),(5,'Education loan',600000,7.5,84,'Pending'),(8,'Business loan',2000000,10.5,72,'Pending');
+
+SELECT count(*) AS seeded_accounts FROM accounts;
+CREATE TEMP TABLE counter_receipts (id integer PRIMARY KEY);
+ALTER TABLE counter_receipts ADD COLUMN note text;
+INSERT INTO counter_receipts VALUES (1, 'Deposit');
+UPDATE counter_receipts SET note = 'Deposit verified' WHERE id = 1 RETURNING *;
+DELETE FROM counter_receipts WHERE id = 1 RETURNING *;
+DROP TABLE counter_receipts;
+ROLLBACK;
