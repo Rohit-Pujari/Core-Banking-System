@@ -36,6 +36,7 @@ Balance_Audit_created_at [shape=ellipse,label="created_at"]; Balance_Audit -- Ba
 Loan [shape=box, label="Loan", margin="0.18,0.12"];
 Loan_loan_id [shape=ellipse,label=<<U>loan_id</U>>]; Loan -- Loan_loan_id;
 Loan_kind [shape=ellipse,label="kind"]; Loan -- Loan_kind;
+Loan_paid [shape=ellipse,label="amount_paid"]; Loan -- Loan_paid;
 Loan_principal [shape=ellipse,label="principal"]; Loan -- Loan_principal;
 Loan_rate [shape=ellipse,label="rate"]; Loan -- Loan_rate;
 Loan_months [shape=ellipse,label="months"]; Loan -- Loan_months;

@@ -114,6 +114,8 @@ A successful transfer creates one `transfers` row and normally two `audit_log` r
 
 **Loan to receiving account.** The borrower selects an active account when applying. Approval locks the pending loan, credits its principal to that account, and records the admin decision in one MySQL transaction. The balance trigger records the credit. For a loan approved by an admin before payouts were implemented, select the receiving account and choose **Credit approved loan**. The original reviewer and decision time are preserved. For an older pending loan, the admin selects the borrower’s receiving account before approval.
 
+**Repayment.** In My loans, choose Make payment, select an active account and enter a partial amount or use the full payoff amount. MySQL debits the account and updates `loans.amount_paid` in one transaction. Paying the remaining principal closes the loan. Interest is shown as an EMI estimate only. The balance trigger records the account debit.
+
 ## Evaluator commands
 
 A customer uploads their KYC PDF from My profile. MongoDB stores the file under the MySQL customer ID. Staff download it from Customers and record the verification decision in MySQL.

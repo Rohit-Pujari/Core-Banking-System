@@ -41,7 +41,7 @@ export async function GET(request) {
       accounts: `SELECT a.*,c.name,b.name AS branch FROM accounts a JOIN customers c ON c.id=a.customer_id JOIN branches b ON b.id=a.branch_id ${customer ? 'WHERE a.customer_id=?' : ''} ORDER BY a.id`,
       customers: `SELECT * FROM customers ${customer ? 'WHERE id=?' : ''} ORDER BY id`,
       transfers: `SELECT t.*,s.number AS source,d.number AS destination,c.name FROM transfers t JOIN accounts s ON s.id=t.from_account JOIN accounts d ON d.id=t.to_account JOIN customers c ON c.id=s.customer_id ${customer ? 'WHERE s.customer_id=? OR d.customer_id=?' : ''} ORDER BY t.created_at DESC,t.id DESC LIMIT 100`,
-      loans: `SELECT l.*,c.name,a.number AS account_number,monthly_emi(principal,rate,months) AS emi FROM loans l JOIN customers c ON c.id=l.customer_id LEFT JOIN accounts a ON a.id=l.account_id ${customer ? 'WHERE l.customer_id=?' : ''} ORDER BY l.id`
+      loans: `SELECT l.*,CASE WHEN l.status='Closed' THEN 0 ELSE l.principal-l.amount_paid END AS remaining,c.name,a.number AS account_number,monthly_emi(principal,rate,months) AS emi FROM loans l JOIN customers c ON c.id=l.customer_id LEFT JOIN accounts a ON a.id=l.account_id ${customer ? 'WHERE l.customer_id=?' : ''} ORDER BY l.id`
     };
     for (const [key, sql] of Object.entries(sqls)) result[key] = (await db.query(sql, customer && key === 'transfers' ? [...params, ...params] : params)).rows;
     result.branches = (await db.query(queries[2].sql)).rows;
@@ -105,6 +105,25 @@ export async function POST(request) {
       return reply({
         message: `Transfer TXN-${result.id} completed successfully.`
       });
+    }
+    if (b.action === 'loan-payment') {
+      if (user.role !== 'customer') throw new HttpError('Customer access is required.', 403);
+      const amount = String(b.amount);
+      if (!/^\d{1,14}(\.\d{1,2})?$/.test(amount) || Number(amount) <= 0) throw new HttpError('Enter a positive payment with at most two decimals.');
+      const closed = await db.transaction(async tx => {
+        const loan = (await tx.query('SELECT *, principal-amount_paid AS remaining FROM loans WHERE id=? AND customer_id=? FOR UPDATE', [id(b.id), user.customer_id])).rows[0];
+        if (!loan || loan.status !== 'Active' || needsLoanCredit(loan)) throw new HttpError('This loan cannot receive payments.');
+        if (String(loan.amount_paid) !== String(b.previous_paid)) throw new HttpError('The loan balance changed. Refresh My loans before paying again.');
+        const cents = value => BigInt(String(value).split('.')[0]) * 100n + BigInt((String(value).split('.')[1] || '').padEnd(2, '0'));
+        const due = cents(loan.remaining), payment = cents(amount);
+        if (payment > due) throw new HttpError('Payment exceeds the remaining principal.');
+        const debit = await tx.query("UPDATE accounts SET balance=balance-? WHERE id=? AND customer_id=? AND status='Active' AND balance>=?", [amount, id(b.account_id), user.customer_id, amount]);
+        if (!debit.affectedRows) throw new HttpError('Choose an active account with enough funds.');
+        const settled = payment === due;
+        await tx.query('UPDATE loans SET amount_paid=amount_paid+?, status=? WHERE id=?', [amount, settled ? 'Closed' : 'Active', loan.id]);
+        return settled;
+      });
+      return reply({message: closed ? 'Loan paid off and closed.' : 'Loan payment recorded.'});
     }
     if (b.action === 'loan') {
       if (user.role !== 'customer') throw new HttpError('Loan applications must be submitted by a customer.', 403);

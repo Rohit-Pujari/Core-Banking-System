@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS loans (
   FOREIGN KEY (customer_id) REFERENCES customers(id),
   kind VARCHAR(255) NOT NULL,
   principal NUMERIC(16,2) NOT NULL CHECK(principal>0),
+  amount_paid DECIMAL(16,2) NOT NULL DEFAULT 0 CHECK(amount_paid BETWEEN 0 AND principal),
   rate NUMERIC(5,2) NOT NULL,
   months INTEGER NOT NULL CHECK(months>0),
   account_id INT,

@@ -166,7 +166,7 @@ export default function Bank() {
                 Reports: 'Customer deposits, branch structure and transfer reports.',
                 'Audit trail': 'Automatic history of account balance changes.',
                 Team: 'Manage the people who serve your customers.'
-              }[page]}</p></div><div className="actions"><button className="button secondary icon-button" onClick={load} aria-label="Refresh data"><RefreshCw size={16} /></button><button className="button primary" onClick={() => {
+              }[page]}</p></div><div className="actions"><button className="button secondary icon-button" onClick={load} aria-label="Refresh data"><RefreshCw size={16} /></button>{page !== 'Loans' && <button className="button primary" onClick={() => {
               setError('');
               setModal(openAction);
             }}><Plus size={17} />{{
@@ -174,7 +174,7 @@ export default function Bank() {
                 account: 'Open account',
                 employee: 'Add employee',
                 transfer: 'New transfer'
-              }[openAction]}</button></div></div>
+              }[openAction]}</button>}</div></div>
  {notice && <div className="notice"><CheckCircle2 size={17} />{notice}<button onClick={() => setNotice('')} aria-label="Dismiss notification"><X size={16} /></button></div>}{error && <div role="alert" className="error">{error}</div>}
  {!data ? <div className="panel loading">{error ? 'Unable to load the bank. Use refresh to retry.' : 'Opening your banking workspace…'}</div> : <>
  {page === 'Overview' && <><div className="stats"><Stat label="TOTAL DEPOSITS" value={money(total)} icon={Wallet} sub={`${data.accounts.length} accounts across ${data.branches.length} branches`} /><Stat label="CUSTOMERS" value={data.customers.length.toString().padStart(2, '0')} icon={Users} sub={`${data.customers.filter(x => x.kyc.verified).length} KYC verified`} /><Stat label="TRANSFER VOLUME" value={money(data.transfers.reduce((a, x) => a + Number(x.amount), 0))} icon={ArrowLeftRight} sub={`${data.transfers.length} recent transfers`} /><Stat label="LOAN PORTFOLIO" value={money(data.loans.filter(l => l.status === 'Active').reduce((a, x) => a + Number(x.principal), 0))} icon={HandCoins} sub={`${data.loans.filter(x => x.status === 'Active').length} active · ${data.loans.filter(x => x.status === 'Pending').length} pending`} /></div>
@@ -200,7 +200,7 @@ export default function Bank() {
  {page === 'Customers' && <Table headers={['Customer', 'Contact', 'Occupation', 'KYC', 'Risk', 'Document', 'Action']} rows={data.customers.filter(matches).map(c => [<Person key={c.id} name={c.name} sub={'CIF · ' + String(c.id).padStart(4, '0')} />, <div key="contact">{c.email}<small>{c.phone}</small></div>, c.kyc.occupation, <Badge key="kyc" text={c.kyc.verified ? 'Verified' : 'Pending'} />, c.kyc.risk, <button key="proof" className="row-action" onClick={() => setReviewCustomer(c.id)}>View proof</button>, c.kyc.verified ? '—' : <button key="verify" className="row-action" disabled={busy} onClick={() => act('kyc', {
               id: c.id
             })}>Verify KYC</button>])} />}
- {page === 'Loans' && <Table headers={['Borrower', 'Product', 'Receiving account', 'Principal', 'Rate', 'Monthly EMI', 'Status', ...(user.role === 'admin' ? ['Review'] : [])]} rows={data.loans.filter(matches).map(l => [l.name, l.kind, l.account_number || '—', money(l.principal), l.rate + '%', money(l.emi), <Badge key="status" text={l.status} />, ...(user.role === 'admin' ? [l.status === 'Pending' || needsLoanCredit(l) ? <div className="row-actions" key="review"><form onSubmit={e => {
+ {page === 'Loans' && <Table headers={['Borrower', 'Product', 'Receiving account', 'Principal', 'Principal due', 'Rate', 'Monthly EMI', 'Status', ...(user.role === 'admin' ? ['Review'] : [])]} rows={data.loans.filter(matches).map(l => [l.name, l.kind, l.account_number || '—', money(l.principal), l.status === 'Closed' || l.status === 'Active' && !needsLoanCredit(l) ? money(l.remaining) : '—', l.rate + '%', money(l.emi), <Badge key="status" text={l.status} />, ...(user.role === 'admin' ? [l.status === 'Pending' || needsLoanCredit(l) ? <div className="row-actions" key="review"><form onSubmit={e => {
                 e.preventDefault();
                 act(needsLoanCredit(l) ? 'loan-credit' : 'loan-review', { id: l.id, status: 'Active', account_id: new FormData(e.currentTarget).get('account_id') });
               }}>
