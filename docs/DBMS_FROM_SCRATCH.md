@@ -137,7 +137,7 @@ Open http://localhost:3000. Sign in with one of the demo users below. The sign-i
 
 ### Customer screens
 
-After Aarav signs in, the customer home screen shows his combined account balance, account cards, and recent transfers. **My accounts** lists his accounts. **Payments** lists his incoming and outgoing transfers. **My loans** shows his loan records and an application form. **My profile** shows contact information and KYC status.
+After Aarav signs in, the customer home screen shows his combined account balance, account cards, and recent transfers. **My accounts** lists his accounts. **Payments** lists his incoming and outgoing transfers. **My loans** shows his loan records and an application form. **My profile → Edit profile** lets customers update their occupation and mobile number. The API uses the customer ID from their login session and updates only those two fields in MySQL.
 
 To demonstrate a transfer, click **Send money**. Choose Aarav's Savings account, enter `VB10002` as the recipient account, and enter `100`. Confirm the transfer. The account balances and transfer history refresh. Sign out and sign in as Diya to show the incoming transfer from her view.
 

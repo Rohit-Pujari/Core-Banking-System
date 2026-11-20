@@ -58,6 +58,17 @@ export async function POST(request) {
     const user = await requireUser(request),
       db = await getDb(),
       b = await request.json();
+    if (b.action === 'profile') {
+      if (user.role !== 'customer') throw new HttpError('Customer access is required.', 403);
+      const occupation = typeof b.occupation === 'string' ? b.occupation.trim() : '';
+      const phone = typeof b.phone === 'string' ? b.phone.trim() : '';
+      if (!occupation || occupation.length > 100 || !/^\d{10}$/.test(phone)) {
+        throw new HttpError('Enter an occupation and a 10-digit mobile number.');
+      }
+      await db.query("UPDATE customers SET phone=?, kyc=JSON_SET(kyc,'$.occupation',?) WHERE id=?",
+        [phone, occupation, user.customer_id]);
+      return reply({ message: 'Profile updated.' });
+    }
     if (b.action === 'deposit') {
       staff(user);
       const amount = String(b.amount);
