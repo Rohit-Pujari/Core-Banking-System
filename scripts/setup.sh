@@ -9,7 +9,7 @@ if [ "$(bank -Ns -e "SELECT COUNT(*) FROM information_schema.columns WHERE table
   bank -e 'ALTER TABLE loans ADD account_id INT, ADD FOREIGN KEY (account_id) REFERENCES accounts(id)'
 fi
 if [ "$(bank -Ns -e "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='vault' AND table_name='loans' AND column_name='amount_paid'")" = 0 ]; then
-  bank -e 'ALTER TABLE loans ADD amount_paid DECIMAL(16,2) NOT NULL DEFAULT 0 CHECK(amount_paid BETWEEN 0 AND principal)'
+  bank -e 'ALTER TABLE loans ADD amount_paid DECIMAL(16,2) NOT NULL DEFAULT 0, ADD CONSTRAINT loans_paid_range CHECK (amount_paid BETWEEN 0 AND principal)'
 fi
 # Seed/import is transactional. Never overlay existing bank records.
 if [ "$(bank -Ns -e 'SELECT COUNT(*) FROM branches')" = 0 ]; then
