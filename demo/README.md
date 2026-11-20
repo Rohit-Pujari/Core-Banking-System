@@ -68,7 +68,17 @@ For a five-minute SQL demo, run queries 1–5 at the MySQL prompt. Add query 8 i
 bank < demo/03-function-trigger.sql
 ```
 
-Open [03-definitions.sql](03-definitions.sql) for the complete executable CREATE statements. From Bash, run `cat demo/03-definitions.sql` to display the source. Setup already installs these routines. The demonstration above prints the installed definitions vertically, then runs the transfer. In the app, pressing Send calls the bank API, which checks ownership and calls `transfer_funds` inside a transaction. The function locks the two accounts in ID order, checks funds, updates the balances and inserts the payment. MySQL calls the trigger once per updated row. Inside it, `OLD.balance` and `NEW.balance` are the values before and after that update. The other function, `monthly_emi`, calculates the instalment shown with each loan.
+The [demo SQL](03-function-trigger.sql) contains all three complete CREATE statements. Run `cat demo/03-function-trigger.sql` to read them or use the command above to execute them in MySQL 8.4. The IF NOT EXISTS clauses keep installed definitions intact.
+
+| Object | Type | App feature |
+|---|---|---|
+| `transfer_funds` | Stored function | Send money locks the accounts, moves the amount and returns the transfer ID. |
+| `balance_audit` | AFTER UPDATE trigger | A changed balance writes its old and new values to the audit log during transfers, deposits, loan payouts and repayments. |
+| `monthly_emi` | Stored function | Loan screens and the staff EMI report calculate the monthly instalment estimate. |
+
+**Stored procedures:** none. The app invokes its stored functions with SELECT. Queries 1–7 in section 2 run in staff Reports. Query 8 demonstrates full-text search in the CLI.
+
+In the app, pressing Send calls the bank API, which checks ownership and calls `transfer_funds` inside a transaction. The function locks the two accounts in ID order, checks funds, updates the balances and inserts the payment. MySQL calls the trigger once per updated row. Inside it, `OLD.balance` and `NEW.balance` are the values before and after that update. The other function, `monthly_emi`, calculates the instalment shown with each loan.
 
 Use seeded accounts 1 and 2 while both are active and account 1 has at least ₹100. Read the balances, call transfer_funds and compare the balances again. One falls by ₹100 and the other rises by ₹100. The balance_audit trigger writes two audit rows automatically. ROLLBACK restores the balances for another rehearsal.
 
