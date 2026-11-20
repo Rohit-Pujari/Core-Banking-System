@@ -1,20 +1,21 @@
 # Vault — Core Bank Management System
 
 For the evaluator, start with the [five terminal demonstrations](demo/README.md).
-A Next.js banking application for customers, employees and administrators, with PostgreSQL persistence and DBMS presentation tools.
+A Next.js banking application for customers, employees and administrators, with MySQL persistence and DBMS presentation tools.
 
 Read the [from-scratch DBMS guide](docs/DBMS_FROM_SCRATCH.md) for the tables, relationships and banking workflows.
 
-## Run
+## Run with MySQL 8.4
 
-Requires Node.js 20.9+.
+Start Docker, then run these commands from the project directory.
 
 ```sh
 npm install
+npm run db:setup
 npm run dev
 ```
 
-Open **http://localhost:3000**. Embedded PostgreSQL (PGlite) initializes and migrates automatically. Banking data persists in `data/bank`. Existing seeded banking records are preserved by the application migration.
+Open http://localhost:3000. In a second terminal run `npm run db:cli` and type `SHOW TABLES;`. Both sessions use the same vault database. Setup restores the local export in `data/backups/mysql-import.sql` when present. A fresh checkout uses fictional sample rows. The MySQL volume persists between restarts.
 
 ## Demo sign-ins
 
@@ -35,38 +36,7 @@ Customers view balances, make internal transfers and apply for loans. Staff mana
 
 Eight application tables store the data. Staff Reports use CTEs, recursive queries, subqueries and window functions. The overview chart uses SQL daily totals; the branch list uses a recursive CTE. Transfers use a stored function and automatic audit trigger.
 
-See the [short project guide](docs/PROJECT_GUIDE.md) for relationships and workflows.
+See the [project diagrams](diagrams/index.html) for relationships and workflows.
 
-## DBMS presentation kit
 
-[Diagram gallery](diagrams/index.html) — ER diagram, architecture, transfer flow, role permissions and onboarding/loan flow. Open locally in a browser; SVG diagrams are included.
-
-Start with [DEMO_PLAYBOOK.txt](DEMO_PLAYBOOK.txt): a live execution script with terminal commands, query explanations, expected results, real database logins, trigger/function execution and MongoDB demonstration.
-
-- [SQL command notebook](sql/ALL_COMMANDS.txt): DDL, DML, queries, triggers, functions, login schema and CLI privileges
-- [MongoDB command notebook](mongo/DEMO_COMMANDS.txt): independently seeded NoSQL companion
-
-```sh
-npm test
-npm run build
-npm start
-```
-
-Tests use independent in-memory databases, covering banking integrity, authentication, customer isolation, role permissions, registration, servicing, approvals, session expiry and logout. Stop the app before running `npm run db:cli` against its persistent embedded database.
-
-Optional server PostgreSQL: `docker compose up -d`, then `DATABASE_URL=postgresql://bank_admin:bank_demo@localhost:5433/vault npm run db:setup`. Set the same URL in `.env.local` and restart Next.js. See DEMO_PLAYBOOK.txt for SQL and MongoDB CLI demos.
-
-All records and funds are fictional. This is a local coursework application with published demo credentials, not a production banking deployment. No real payment rails, document verification provider or money disbursement is integrated.
-
-Framework reference: https://nextjs.org/docs/app/guides/authentication
-
-## Read the code in this order
-
-1. `sql/01-schema.sql` — tables, transfer function and audit trigger.
-2. `lib/db.mjs` — connection and transactions.
-3. `app/api/auth/route.js` — registration and login.
-4. `app/api/bank/route.js` — banking actions and permission checks.
-5. `lib/queries.mjs` — SQL used by reports.
-6. `app/customer.js` and `app/workspace.js` — customer and staff screens.
-
-`docs/PROJECT_GUIDE.md` is the explanation; `DEMO_PLAYBOOK.txt` is the execution guide. Diagram sources and their SVG outputs are kept together in `diagrams/`.
+With the Compose MySQL server running, use `npm test` to run integration tests in disposable databases.

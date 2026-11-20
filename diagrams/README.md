@@ -13,7 +13,7 @@ Open [index.html](index.html) for the complete gallery.
 
 Rectangles are entities, diamonds are relationships, ovals are attributes, and underlined attributes are primary keys. Lines have no arrows. Min/max labels on each entity's relationship line give its participation: `(0,N)` optional many, `(1,1)` exactly one, `(0,1)` optional one. Minimum 1 expresses total participation; this diagram uses min/max notation instead of also drawing double participation lines.
 
-KYC is a composite conceptual attribute with verified, occupation and risk components, stored together in PostgreSQL JSONB. Those components describe the application document, not separately constrained SQL columns. EMI is derived from principal, rate and term, so its oval is dashed. Account balance is stored, so it is not shown as derived.
+KYC is a composite conceptual attribute with verified, occupation and risk components, stored together in MySQL JSON. Those components describe the application document, not separately constrained SQL columns. EMI is derived from principal, rate and term, so its oval is dashed. Account balance is stored, so it is not shown as derived.
 
 The conceptual key labels customer_id, branch_id, account_id, transfer_id, audit_id, loan_id and user_id map to the respective table's `id` column. Session token_hash uses its actual column name. Foreign-key columns are expressed through relationships in Chen notation; see the relational schema for the actual columns.
 

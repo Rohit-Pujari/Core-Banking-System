@@ -1,7 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PGlite } from '@electric-sql/pglite';
-import { initialize, wrapDatabase } from '../lib/db.mjs';
+import { testDatabase } from './mysql.mjs';
 import { GET as session, POST as authenticate, DELETE as logout } from '../app/api/auth/route.js';
 import { GET, POST } from '../app/api/bank/route.js';
 import { digest } from '../lib/password.mjs';
@@ -17,9 +16,7 @@ const request = (path, body, cookie = '', method = body ? 'POST' : 'GET', origin
   } : {})
 });
 test('Application sessions, ownership and customer/employee/admin workflows', async () => {
-  const engine = new PGlite();
-  await engine.waitReady;
-  const db = await initialize(wrapDatabase(engine));
+  const db = await testDatabase();
   globalThis.bankDbPromise = Promise.resolve(db);
   try {
     async function login(email) {
@@ -77,14 +74,14 @@ test('Application sessions, ownership and customer/employee/admin workflows', as
       note: 'Customer payment'
     }, aarav)).status, 200);
     assert.equal((await db.query('SELECT sum(balance) AS total FROM accounts')).rows[0].total, before);
-    const after = (await db.query('SELECT count(*)::int AS n FROM audit_log')).rows[0].n;
+    const after = (await db.query('SELECT count(*) AS n FROM audit_log')).rows[0].n;
     assert.equal((await call({
       action: 'transfer',
       from: 1,
       destination: 'VB10002',
       amount: '9999999999'
     }, aarav)).status, 400);
-    assert.equal((await db.query('SELECT count(*)::int AS n FROM audit_log')).rows[0].n, after);
+    assert.equal((await db.query('SELECT count(*) AS n FROM audit_log')).rows[0].n, after);
     assert.equal((await call({
       action: 'transfer',
       from: 1,
@@ -160,7 +157,7 @@ test('Application sessions, ownership and customer/employee/admin workflows', as
     assert.match(registration.headers.get('set-cookie'), /SameSite=Lax/);
     const registered = await registration.json();
     assert.equal(registered.user.role, 'customer');
-    const countBefore = (await db.query('SELECT count(*)::int AS n FROM customers')).rows[0].n;
+    const countBefore = (await db.query('SELECT count(*) AS n FROM customers')).rows[0].n;
     assert.equal((await authenticate(request('/api/auth', {
       action: 'register',
       name: 'Duplicate',
@@ -168,7 +165,7 @@ test('Application sessions, ownership and customer/employee/admin workflows', as
       email: 'new@example.com',
       password: 'StrongPassword123'
     }))).status, 400);
-    assert.equal((await db.query('SELECT count(*)::int AS n FROM customers')).rows[0].n, countBefore);
+    assert.equal((await db.query('SELECT count(*) AS n FROM customers')).rows[0].n, countBefore);
     const newCookie = registration.headers.get('set-cookie').split(';')[0];
     const newData = await (await GET(request('/api/bank', null, newCookie))).json();
     assert.equal(newData.accounts.length, 0);
@@ -202,7 +199,7 @@ test('Application sessions, ownership and customer/employee/admin workflows', as
     assert.equal((await logout(request('/api/auth', null, aarav, 'DELETE'))).status, 200);
     assert.equal((await GET(request('/api/bank', null, aarav))).status, 401);
     const token = diya.split('=')[1];
-    await db.query("UPDATE app_sessions SET expires_at=now()-interval '1 second' WHERE token_hash=$1", [digest(token)]);
+    await db.query("UPDATE app_sessions SET expires_at=now()-INTERVAL 1 SECOND WHERE token_hash=?", [digest(token)]);
     assert.equal((await GET(request('/api/bank', null, diya))).status, 401);
     assert.equal((await (await session(request('/api/auth', null, diya))).json()).user, null);
   } finally {

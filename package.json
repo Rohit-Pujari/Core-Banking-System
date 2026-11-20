@@ -8,15 +8,14 @@
     "build": "next build",
     "start": "next start --hostname 0.0.0.0",
     "test": "node --test tests/*.test.mjs",
-    "db:setup": "node scripts/setup.mjs",
-    "db:cli": "node scripts/cli.mjs"
+    "db:setup": "bash scripts/setup.sh",
+    "db:cli": "docker compose exec mysql mysql -ubank_admin -pbank_demo vault"
   },
   "dependencies": {
+    "lucide-react": "latest",
+    "mysql2": "^3.14.0",
     "next": "latest",
     "react": "latest",
-    "react-dom": "latest",
-    "@electric-sql/pglite": "latest",
-    "pg": "latest",
-    "lucide-react": "latest"
+    "react-dom": "latest"
   }
 }

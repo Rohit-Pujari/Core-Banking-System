@@ -1,18 +1,20 @@
 services:
-  postgres:
-    image: postgres:17
+  mysql:
+    image: mysql:8.4
+    command: --log-bin-trust-function-creators=1
     environment:
-      POSTGRES_DB: vault
-      POSTGRES_USER: bank_admin
-      POSTGRES_PASSWORD: bank_demo
+      MYSQL_DATABASE: vault
+      MYSQL_USER: bank_admin
+      MYSQL_PASSWORD: bank_demo
+      MYSQL_ROOT_PASSWORD: vault_root_demo
     ports:
-      - "5433:5432"
+      - "127.0.0.1:3307:3306"
     volumes:
-      - bank_data:/var/lib/postgresql/data
+      - mysql_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U bank_admin -d vault"]
+      test: ["CMD", "mysql", "-ubank_admin", "-pbank_demo", "vault", "-e", "SELECT 1"]
       interval: 3s
-      retries: 10
+      retries: 40
   mongo:
     image: mongo:8
     volumes:
@@ -20,4 +22,4 @@ services:
       - ./mongo/init.js:/docker-entrypoint-initdb.d/01-seed.js:ro
 volumes:
   mongo_data:
-  bank_data:
+  mysql_data:

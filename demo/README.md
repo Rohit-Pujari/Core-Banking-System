@@ -1,22 +1,47 @@
 # DBMS practical exam
 
-Open a Bash terminal in the project root. Start Docker and prepare the bank before class. The setup command uses the same PostgreSQL database as the commands below.
+Start Docker. Open **Bash** in the project folder and run these commands once before presenting.
 
 ```bash
-docker compose up -d --wait
-DATABASE_URL=postgresql://bank_admin:bank_demo@localhost:5433/vault npm run db:setup
-bank() { docker compose exec -T postgres psql -X -U bank_admin -d vault -v ON_ERROR_STOP=1 -P pager=off -a "$@"; }
+npm run db:setup
+docker compose up -d mongo
 ```
 
-Keep this terminal open. The Bash function called `bank` prints each SQL statement and its result. Run the five commands below **one at a time**. To type statements manually, open `docker compose exec postgres psql -U bank_admin -d vault` and paste the corresponding file one statement at a time, including its transaction commands. Type `\q` to leave psql.
+Wait for the account count and deposits total. If you see `ECONNREFUSED 127.0.0.1:3307`, check `docker compose ps mysql` and rerun setup before opening the app.
+
+| Evaluator asks for | File to open |
+|---|---|
+| DDL and DML in Notepad | [01-ddl-dml.txt](01-ddl-dml.txt) |
+| Five or more complex queries | [02-queries.sql](02-queries.sql) |
+| Function and trigger | [03-function-trigger.sql](03-function-trigger.sql) |
+| Database users and privileges | [04-privileges.sql](04-privileges.sql) |
+| NoSQL | [05-nosql.js](05-nosql.js) |
+
+**To present one statement at a time**, type `npm run db:cli` in Bash. At the `mysql>` prompt, try:
+
+```sql
+SELECT DATABASE(), CURRENT_USER();
+SHOW TABLES;
+DESCRIBE accounts;
+```
+
+You should see database `vault` and the columns of `accounts`. For sections 2 and 3, copy one complete SQL statement from the numbered file, including its final semicolon, and press Enter. Read the result before pasting the next one. Type `exit` to return to Bash. Sections 1, 4 and 5 use their own database or login as shown below.
+
+For a quicker rehearsal, define this shortcut in Bash. The commands beginning with `bank <` run a whole file and print both the statements and results.
+
+```bash
+bank() { docker compose exec -T mysql mysql -v -ubank_admin -pbank_demo vault "$@"; }
+```
 
 ## 1. Create tables and change rows
 
 ```bash
-bank < demo/01-ddl-dml.txt
+docker compose exec -T mysql mysql -uroot -pvault_root_demo -e 'CREATE DATABASE vault_rehearsal'
+docker compose exec -T mysql mysql -v -uroot -pvault_root_demo vault_rehearsal < demo/01-ddl-dml.txt
+docker compose exec -T mysql mysql -uroot -pvault_root_demo -e 'DROP DATABASE vault_rehearsal'
 ```
 
-Open the text file in Notepad to show the actual banking schema and seed commands. Point out the foreign key from accounts to customers. The seed creates ten accounts. At the end, CREATE and ALTER define a receipt table, INSERT adds a receipt, UPDATE changes its note and DELETE returns the row it removed. DROP removes the table. The rehearsal runs in its own schema and ROLLBACK undoes it.
+Open the text file in Notepad to show the actual banking schema and seed commands. Point out the foreign key from accounts to customers. The seed creates ten accounts. At the end, CREATE defines a receipt table, INSERT adds a receipt, UPDATE changes its note and DELETE removes it. DROP removes the table. Use a fresh rehearsal database each time. MySQL commits DDL immediately.
 
 ## 2. Execute the complex queries
 
@@ -24,7 +49,7 @@ Open the text file in Notepad to show the actual banking schema and seed command
 bank < demo/02-queries.sql
 ```
 
-Pause after each result during a manual demo. The first five are the core presentation queries.
+For a five-minute SQL demo, run queries 1–5 at the MySQL prompt. Add query 8 if asked to show full-text search.
 
 | Query | What to explain when the rows appear |
 |---|---|
@@ -34,7 +59,7 @@ Pause after each result during a manual demo. The first five are the core presen
 | Daily transfers | GROUP BY produces one total per day. A SUM window accumulates those totals in date order. |
 | Latest outgoing transfer | ROW_NUMBER restarts at each sender and counts from the newest transfer. Keeping row 1 gives one result per sending account. |
 | Loan instalments | A join supplies the borrower name. The EMI function calculates monthly payment from amount, rate and term. |
-| Verified KYC | JSONB containment selects verified customers. Field extraction reads their occupation and risk. |
+| Verified KYC | JSON containment selects verified customers. Field extraction reads their occupation and risk. |
 | Full-text search | The final CLI example tokenizes each narration and matches the word rent. Look for Monthly rent payments. |
 
 ## 3. Call a function and observe its trigger
@@ -48,10 +73,28 @@ Use seeded accounts 1 and 2 while both are active and account 1 has at least ₹
 ## 4. Demonstrate database privileges
 
 ```bash
-bank < demo/04-privileges.sql
+docker compose exec -T mysql mysql -uroot -pvault_root_demo vault < demo/04-privileges.sql
+docker compose exec mysql mysql -uvault_auditor -pauditor_demo vault
 ```
 
-The admin creates two temporary demonstration roles within the transaction. GRANT assigns privileges and SET LOCAL ROLE switches the effective database user. Point to current_user on screen. The auditor can read balances but UPDATE reports permission denied. The teller can execute a transfer but DELETE reports permission denied. WHERE false keeps the denial probes harmless. The two errors are expected. Each savepoint lets the demo continue after a denial. The last rollback removes the transfer and roles.
+At the auditor prompt, run these lines. SELECT succeeds and UPDATE gives an access-denied error.
+
+```sql
+SELECT CURRENT_USER(), number, balance FROM accounts LIMIT 2;
+UPDATE accounts SET balance=balance WHERE id=1;
+exit
+```
+
+In Bash open the teller session with `docker compose exec mysql mysql -uvault_teller -pteller_demo vault`. The teller can call the transfer function. The final DELETE should give an access-denied error.
+
+```sql
+SELECT CURRENT_USER();
+START TRANSACTION;
+SELECT transfer_funds(1,2,100,'Teller demo');
+ROLLBACK;
+DELETE FROM customers WHERE FALSE;
+exit
+```
 
 ## 5. Query MongoDB
 

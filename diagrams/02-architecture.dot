@@ -12,19 +12,14 @@ Session lookup • Role checks • Account ownership
 Origin validation • Login throttling"];
 service [label="Banking operations
 Parameterized SQL + database transactions"];
-pg [label="PostgreSQL
+pg [label="MySQL
 Tables • Constraints • Functions • Audit trigger"];
-embedded [label="Default: PGlite
-Persistent data/bank", fillcolor="#eef1fb"];
-server [label="Optional: PostgreSQL container
-DATABASE_URL • psql CLI", fillcolor="#eef1fb"];
 mongo [label="MongoDB container
 Independent KYC and knowledge documents
 CLI demo only; not connected to app data", fillcolor="#fff5df"];
 cli [label="Presentation terminal
-psql / mongosh"];
+mysql / mongosh"];
 customer -> next; staff -> next; next -> auth; auth -> service; service -> pg;
-pg -> embedded [label="one runtime option",style=dashed]; pg -> server [label="one runtime option",style=dashed];
-cli -> server [label="SQL / privileges"]; cli -> mongo [label="document queries"];
+cli -> pg [label="SQL / privileges"]; cli -> mongo [label="document queries"];
 
 }

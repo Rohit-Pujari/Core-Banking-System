@@ -1,4 +1,7 @@
-BEGIN;
+SHOW CREATE FUNCTION transfer_funds;
+SHOW CREATE TRIGGER balance_audit;
+
+START TRANSACTION;
 SELECT number, balance FROM accounts WHERE id IN (1, 2) ORDER BY id;
 SELECT transfer_funds(1, 2, 100, 'Class demonstration') AS transfer_id;
 SELECT number, balance FROM accounts WHERE id IN (1, 2) ORDER BY id;

@@ -37,12 +37,12 @@ export async function GET(request) {
         user
       };
     const sqls = {
-      accounts: `SELECT a.*,c.name,b.name AS branch FROM accounts a JOIN customers c ON c.id=a.customer_id JOIN branches b ON b.id=a.branch_id ${customer ? 'WHERE a.customer_id=$1' : ''} ORDER BY a.id`,
-      customers: `SELECT * FROM customers ${customer ? 'WHERE id=$1' : ''} ORDER BY id`,
-      transfers: `SELECT t.*,s.number AS source,d.number AS destination,c.name FROM transfers t JOIN accounts s ON s.id=t.from_account JOIN accounts d ON d.id=t.to_account JOIN customers c ON c.id=s.customer_id ${customer ? 'WHERE s.customer_id=$1 OR d.customer_id=$1' : ''} ORDER BY t.created_at DESC,t.id DESC LIMIT 100`,
-      loans: `SELECT l.*,c.name,monthly_emi(principal,rate,months) AS emi FROM loans l JOIN customers c ON c.id=l.customer_id ${customer ? 'WHERE l.customer_id=$1' : ''} ORDER BY l.id`
+      accounts: `SELECT a.*,c.name,b.name AS branch FROM accounts a JOIN customers c ON c.id=a.customer_id JOIN branches b ON b.id=a.branch_id ${customer ? 'WHERE a.customer_id=?' : ''} ORDER BY a.id`,
+      customers: `SELECT * FROM customers ${customer ? 'WHERE id=?' : ''} ORDER BY id`,
+      transfers: `SELECT t.*,s.number AS source,d.number AS destination,c.name FROM transfers t JOIN accounts s ON s.id=t.from_account JOIN accounts d ON d.id=t.to_account JOIN customers c ON c.id=s.customer_id ${customer ? 'WHERE s.customer_id=? OR d.customer_id=?' : ''} ORDER BY t.created_at DESC,t.id DESC LIMIT 100`,
+      loans: `SELECT l.*,c.name,monthly_emi(principal,rate,months) AS emi FROM loans l JOIN customers c ON c.id=l.customer_id ${customer ? 'WHERE l.customer_id=?' : ''} ORDER BY l.id`
     };
-    for (const [key, sql] of Object.entries(sqls)) result[key] = (await db.query(sql, params)).rows;
+    for (const [key, sql] of Object.entries(sqls)) result[key] = (await db.query(sql, customer && key === 'transfers' ? [...params, ...params] : params)).rows;
     result.branches = (await db.query(queries[2].sql)).rows;
     result.volume = user.role === 'customer' ? [] : (await db.query(queries[3].sql)).rows;
     result.audit = user.role === 'admin' ? (await db.query('SELECT * FROM audit_log ORDER BY id DESC LIMIT 100')).rows : [];
@@ -64,15 +64,15 @@ export async function POST(request) {
         destination = String(b.destination || '').trim();
       if (!destination) throw new HttpError('Enter a recipient account number.');
       const result = await db.transaction(async tx => {
-        const account = (await tx.query('SELECT * FROM accounts WHERE id=$1', [source])).rows[0];
+        const account = (await tx.query('SELECT * FROM accounts WHERE id=?', [source])).rows[0];
         if (!account || user.role === 'customer' && account.customer_id !== user.customer_id) throw new HttpError('You cannot transfer from this account.', 403);
-        const target = (await tx.query('SELECT id FROM accounts WHERE number=$1', [destination])).rows[0];
+        const target = (await tx.query('SELECT id FROM accounts WHERE number=?', [destination])).rows[0];
         if (!target) throw new HttpError('Recipient account was not found.');
         let transfer;
         try {
-          transfer = (await tx.query('SELECT transfer_funds($1::integer,$2::integer,$3::numeric,$4::text) AS id', [source, target.id, b.amount, String(b.note || 'Account transfer').slice(0, 200)])).rows[0];
+          transfer = (await tx.query('SELECT transfer_funds(?,?,?,?) AS id', [source, target.id, b.amount, String(b.note || 'Account transfer').slice(0, 200)])).rows[0];
         } catch (e) {
-          if (e.code === 'P0001') throw new HttpError(e.message);
+          if (e.sqlState === '45000') throw new HttpError(e.message);
           throw e;
         }
         return transfer;
@@ -93,7 +93,7 @@ export async function POST(request) {
         };
       if (!rates[b.kind] || !/^\d{1,10}(\.\d{1,2})?$/.test(principal) || Number(principal) < 1000 || Number(principal) > 10000000 || !Number.isInteger(months) || months < 6 || months > 360) throw new HttpError('Choose a loan product, ₹1,000–₹1 crore and a term of 6–360 months.');
       await db.transaction(async tx => {
-        await tx.query("INSERT INTO loans(customer_id,kind,principal,rate,months,status) VALUES($1,$2,$3,$4,$5,'Pending')", [user.customer_id, b.kind, principal, rates[b.kind], months]);
+        await tx.query("INSERT INTO loans(customer_id,kind,principal,rate,months,status) VALUES(?,?,?,?,?,'Pending')", [user.customer_id, b.kind, principal, rates[b.kind], months]);
       });
       return reply({
         message: 'Loan application submitted. Your bank will review it.'
@@ -103,8 +103,8 @@ export async function POST(request) {
       admin(user);
       if (!['Active', 'Rejected'].includes(b.status)) throw new HttpError('Invalid review decision.');
       await db.transaction(async tx => {
-        const loan = (await tx.query("UPDATE loans SET status=$1,reviewed_by=$2,reviewed_at=now() WHERE id=$3 AND status='Pending' RETURNING id", [b.status, user.id, id(b.id)])).rows[0];
-        if (!loan) throw new HttpError('This loan is no longer pending.');
+        const loan = await tx.query("UPDATE loans SET status=?,reviewed_by=?,reviewed_at=now() WHERE id=? AND status='Pending'", [b.status, user.id, id(b.id)]);
+        if (!loan.affectedRows) throw new HttpError('This loan is no longer pending.');
       });
       return reply({
         message: 'Loan decision recorded. Approval does not automatically disburse funds.'
@@ -113,8 +113,8 @@ export async function POST(request) {
     if (b.action === 'kyc') {
       staff(user);
       await db.transaction(async tx => {
-        const r = await tx.query("UPDATE customers SET kyc=jsonb_set(kyc,'{verified}','true') WHERE id=$1 RETURNING id", [id(b.id)]);
-        if (!r.rows.length) throw new HttpError('Customer was not found.');
+        const r = await tx.query("UPDATE customers SET kyc=JSON_SET(kyc,'$.verified',JSON_EXTRACT('true','$')) WHERE id=?", [id(b.id)]);
+        if (!r.affectedRows) throw new HttpError('Customer was not found.');
       });
       return reply({
         message: 'Customer KYC verified.'
@@ -124,8 +124,8 @@ export async function POST(request) {
       staff(user);
       if (!['Active', 'Frozen'].includes(b.status)) throw new HttpError('Invalid account status.');
       await db.transaction(async tx => {
-        const r = await tx.query("UPDATE accounts SET status=$1 WHERE id=$2 AND status IN ('Active','Frozen') RETURNING id", [b.status, id(b.id)]);
-        if (!r.rows.length) throw new HttpError('Account cannot be changed.');
+        const r = await tx.query("UPDATE accounts SET status=? WHERE id=? AND status IN ('Active','Frozen')", [b.status, id(b.id)]);
+        if (!r.affectedRows) throw new HttpError('Account cannot be changed.');
       });
       return reply({
         message: 'Account status updated.'
@@ -135,12 +135,12 @@ export async function POST(request) {
       staff(user);
       if (!['Savings', 'Current'].includes(b.kind)) throw new HttpError('Choose an account type.');
       await db.transaction(async tx => {
-        const owner = (await tx.query('SELECT kyc FROM customers WHERE id=$1 FOR UPDATE', [id(b.customer_id)])).rows[0];
+        const owner = (await tx.query('SELECT kyc FROM customers WHERE id=? FOR UPDATE', [id(b.customer_id)])).rows[0];
         if (!owner) throw new HttpError('Customer was not found.');
         if (!owner.kyc.verified) throw new HttpError('Verify customer KYC before opening an account.');
-        const branch = (await tx.query('SELECT id FROM branches WHERE id=$1', [id(b.branch_id)])).rows[0];
+        const branch = (await tx.query('SELECT id FROM branches WHERE id=?', [id(b.branch_id)])).rows[0];
         if (!branch) throw new HttpError('Branch was not found.');
-        const a = (await tx.query("WITH next_account AS (SELECT nextval('accounts_id_seq') AS id) INSERT INTO accounts(id,number,customer_id,branch_id,kind,balance) SELECT id,'VB'||lpad(id::text,10,'0'),$1,$2,$3,0 FROM next_account RETURNING id,number", [id(b.customer_id), branch.id, b.kind])).rows[0];
+        await tx.query("INSERT INTO accounts(number,customer_id,branch_id,kind,balance) VALUES(CONCAT('VB',UUID_SHORT()),?,?,?,0)", [id(b.customer_id), branch.id, b.kind]);
       });
       return reply({
         message: 'Account opened with a zero balance. It can receive internal transfers.'
@@ -157,12 +157,12 @@ export async function POST(request) {
       const hash = await hashPassword(password);
       await db.transaction(async tx => {
         let customerId = null;
-        if (b.action === 'customer') customerId = (await tx.query('INSERT INTO customers(name,email,phone,kyc) VALUES($1,$2,$3,$4::jsonb) RETURNING id', [name, email, b.phone, JSON.stringify({
+        if (b.action === 'customer') customerId = (await tx.query('INSERT INTO customers(name,email,phone,kyc) VALUES(?,?,?,?)', [name, email, b.phone, JSON.stringify({
           verified: false,
           occupation: String(b.occupation || 'Unspecified').slice(0, 100),
           risk: 'medium'
-        })])).rows[0].id;
-        const created = (await tx.query('INSERT INTO app_users(name,email,password_hash,role,customer_id) VALUES($1,$2,$3,$4,$5) RETURNING id', [name, email, hash, b.action === 'employee' ? 'employee' : 'customer', customerId])).rows[0];
+        })])).insertId;
+        await tx.query('INSERT INTO app_users(name,email,password_hash,role,customer_id) VALUES(?,?,?,?,?)', [name, email, hash, b.action === 'employee' ? 'employee' : 'customer', customerId]);
       });
       return reply({
         message: `${b.action === 'employee' ? 'Employee' : 'Customer'} created. They can now sign in with the supplied credentials.`
@@ -170,7 +170,7 @@ export async function POST(request) {
     }
     throw new HttpError('Unknown action.');
   } catch (e) {
-    if (e.code === '23505') return failure(new HttpError('This email or account is already registered.'));
+    if (e.code === 'ER_DUP_ENTRY') return failure(new HttpError('This email or account is already registered.'));
     return failure(e);
   }
 }

@@ -1,82 +1,395 @@
--- Build a disposable copy of the bank inside this transaction.
-BEGIN;
-CREATE SCHEMA vault_class_rehearsal;
-SET LOCAL search_path = vault_class_rehearsal;
-CREATE TABLE IF NOT EXISTS branches(id SERIAL PRIMARY KEY, name TEXT NOT NULL, city TEXT NOT NULL, parent_id INTEGER REFERENCES branches(id));
-CREATE TABLE IF NOT EXISTS customers(id SERIAL PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL, phone TEXT NOT NULL, kyc JSONB NOT NULL DEFAULT '{}', created_at TIMESTAMPTZ DEFAULT now());
-CREATE TABLE IF NOT EXISTS accounts(id SERIAL PRIMARY KEY, number TEXT UNIQUE NOT NULL, customer_id INTEGER NOT NULL REFERENCES customers(id), branch_id INTEGER NOT NULL REFERENCES branches(id), kind TEXT NOT NULL CHECK(kind IN ('Savings','Current')), balance NUMERIC(16,2) NOT NULL DEFAULT 0 CHECK(balance>=0), status TEXT NOT NULL DEFAULT 'Active' CHECK(status IN ('Active','Frozen','Closed')));
-CREATE TABLE IF NOT EXISTS transfers(id SERIAL PRIMARY KEY, from_account INTEGER NOT NULL REFERENCES accounts(id), to_account INTEGER NOT NULL REFERENCES accounts(id), amount NUMERIC(16,2) NOT NULL CHECK(amount>0), narration TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), CHECK(from_account<>to_account));
-CREATE INDEX IF NOT EXISTS transfers_date_idx ON transfers(created_at);
-CREATE TABLE IF NOT EXISTS audit_log(id SERIAL PRIMARY KEY, account_id INTEGER NOT NULL REFERENCES accounts(id), old_balance NUMERIC(16,2), new_balance NUMERIC(16,2), actor TEXT DEFAULT current_user, created_at TIMESTAMPTZ DEFAULT now());
-CREATE TABLE IF NOT EXISTS loans(id SERIAL PRIMARY KEY, customer_id INTEGER NOT NULL REFERENCES customers(id), kind TEXT NOT NULL, principal NUMERIC(16,2) NOT NULL CHECK(principal>0), rate NUMERIC(5,2) NOT NULL, months INTEGER NOT NULL CHECK(months>0), status TEXT NOT NULL CHECK(status IN ('Active','Pending','Closed')));
-CREATE OR REPLACE FUNCTION audit_balance() RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN
- IF OLD.balance IS DISTINCT FROM NEW.balance THEN
- INSERT INTO audit_log(account_id,old_balance,new_balance) VALUES(NEW.id,OLD.balance,NEW.balance);
- END IF;
- RETURN NEW;
-END $$;
-DROP TRIGGER IF EXISTS balance_audit ON accounts;
-CREATE TRIGGER balance_audit AFTER UPDATE OF balance ON accounts FOR EACH ROW EXECUTE FUNCTION audit_balance();
-CREATE OR REPLACE FUNCTION transfer_funds(source_id INTEGER, destination_id INTEGER, value NUMERIC, note TEXT) RETURNS INTEGER LANGUAGE plpgsql AS $$
-DECLARE transfer_id INTEGER;
-BEGIN
- IF value IS NULL OR value<=0 OR value<>round(value,2) OR source_id=destination_id THEN RAISE EXCEPTION 'Enter a positive amount with at most two decimals and distinct accounts'; END IF;
- -- Consistent lock ordering prevents deadlocks between opposing transfers.
- PERFORM id FROM accounts WHERE id IN(source_id,destination_id) ORDER BY id FOR UPDATE;
- IF (SELECT count(*) FROM accounts WHERE id IN(source_id,destination_id) AND status='Active')<>2 THEN RAISE EXCEPTION 'Both accounts must exist and be active'; END IF;
- IF (SELECT balance FROM accounts WHERE id=source_id)<value THEN RAISE EXCEPTION 'Insufficient funds'; END IF;
- UPDATE accounts SET balance=balance-value WHERE id=source_id;
- UPDATE accounts SET balance=balance+value WHERE id=destination_id;
- INSERT INTO transfers(from_account,to_account,amount,narration) VALUES(source_id,destination_id,value,coalesce(nullif(trim(note),''),'Account transfer')) RETURNING id INTO transfer_id;
- RETURN transfer_id;
-END $$;
-CREATE OR REPLACE FUNCTION monthly_emi(p NUMERIC,r NUMERIC,n INTEGER) RETURNS NUMERIC LANGUAGE SQL IMMUTABLE AS $$
- SELECT round(CASE WHEN r=0 THEN p/n ELSE p*(r/1200)*power(1+r/1200,n)/(power(1+r/1200,n)-1) END,2);
-$$;
+CREATE TABLE IF NOT EXISTS branches (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  city VARCHAR(255) NOT NULL,
+  parent_id INTEGER,
+  FOREIGN KEY (parent_id) REFERENCES branches(id)
+);
+CREATE TABLE IF NOT EXISTS customers (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  email VARCHAR(255) UNIQUE NOT NULL,
+  phone VARCHAR(255) NOT NULL,
+  kyc JSON NOT NULL,
+  created_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3)
+);
+CREATE TABLE IF NOT EXISTS accounts (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  number VARCHAR(255) UNIQUE NOT NULL,
+  customer_id INTEGER NOT NULL,
+  FOREIGN KEY (customer_id) REFERENCES customers(id),
+  branch_id INTEGER NOT NULL,
+  FOREIGN KEY (branch_id) REFERENCES branches(id),
+  kind VARCHAR(255) NOT NULL CHECK(kind IN ('Savings','Current')),
+  balance NUMERIC(16,2) NOT NULL DEFAULT 0 CHECK(balance>=0),
+  status VARCHAR(255) NOT NULL DEFAULT 'Active' CHECK(status IN ('Active','Frozen','Closed'))
+);
+CREATE TABLE IF NOT EXISTS transfers (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  from_account INTEGER NOT NULL,
+  FOREIGN KEY (from_account) REFERENCES accounts(id),
+  to_account INTEGER NOT NULL,
+  FOREIGN KEY (to_account) REFERENCES accounts(id),
+  amount NUMERIC(16,2) NOT NULL CHECK(amount>0),
+  narration VARCHAR(255) NOT NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  CHECK(from_account<>to_account)
+);
+CREATE INDEX transfers_date_idx ON transfers(created_at);
+CREATE TABLE IF NOT EXISTS audit_log (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  account_id INTEGER NOT NULL,
+  FOREIGN KEY (account_id) REFERENCES accounts(id),
+  old_balance NUMERIC(16,2),
+  new_balance NUMERIC(16,2),
+  actor VARCHAR(288),
+  created_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3)
+);
+CREATE TABLE IF NOT EXISTS loans (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  customer_id INTEGER NOT NULL,
+  FOREIGN KEY (customer_id) REFERENCES customers(id),
+  kind VARCHAR(255) NOT NULL,
+  principal NUMERIC(16,2) NOT NULL CHECK(principal>0),
+  rate NUMERIC(5,2) NOT NULL,
+  months INTEGER NOT NULL CHECK(months>0),
+  reviewed_by INT,
+  reviewed_at DATETIME(3),
+  status VARCHAR(255) NOT NULL CHECK(status IN ('Active','Pending','Closed','Rejected'))
+);
 CREATE TABLE IF NOT EXISTS app_users (
- id SERIAL PRIMARY KEY,
- name TEXT NOT NULL,
- email TEXT NOT NULL UNIQUE,
- password_hash TEXT NOT NULL,
- role TEXT NOT NULL CHECK(role IN ('customer','employee','admin')),
- customer_id INTEGER UNIQUE REFERENCES customers(id),
+ id INT AUTO_INCREMENT PRIMARY KEY,
+ name VARCHAR(255) NOT NULL,
+ email VARCHAR(255) NOT NULL UNIQUE,
+ password_hash VARCHAR(255) NOT NULL,
+ role VARCHAR(255) NOT NULL CHECK(role IN ('customer','employee','admin')),
+ customer_id INTEGER UNIQUE, FOREIGN KEY (customer_id) REFERENCES customers(id),
  CHECK ((role='customer' AND customer_id IS NOT NULL) OR (role<>'customer' AND customer_id IS NULL))
 );
 CREATE TABLE IF NOT EXISTS app_sessions (
- token_hash TEXT PRIMARY KEY,
- user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
- expires_at TIMESTAMPTZ NOT NULL,
- created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+ token_hash VARCHAR(255) PRIMARY KEY,
+ user_id INTEGER NOT NULL, FOREIGN KEY (user_id) REFERENCES app_users(id) ON DELETE CASCADE,
+ expires_at DATETIME(3) NOT NULL,
+ created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
 );
-ALTER TABLE loans DROP CONSTRAINT IF EXISTS loans_status_check;
-ALTER TABLE loans ADD CONSTRAINT loans_status_check CHECK(status IN ('Active','Pending','Closed','Rejected'));
-ALTER TABLE loans ADD COLUMN IF NOT EXISTS reviewed_by INTEGER REFERENCES app_users(id);
-ALTER TABLE loans ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
-CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON app_sessions(expires_at);
-INSERT INTO branches(name,city,parent_id) VALUES ('Head Office','Bengaluru',NULL),('Indiranagar','Bengaluru',1),('Koramangala','Bengaluru',1),('Jayanagar','Bengaluru',1);
-INSERT INTO customers(name,email,phone,kyc) VALUES
-('Aarav Sharma','aarav@example.com','9876501001','{"verified":true,"occupation":"Engineer","risk":"low"}'),
-('Diya Patel','diya@example.com','9876501002','{"verified":true,"occupation":"Designer","risk":"low"}'),
-('Arjun Rao','arjun@example.com','9876501003','{"verified":true,"occupation":"Business owner","risk":"medium"}'),
-('Ananya Iyer','ananya@example.com','9876501004','{"verified":true,"occupation":"Doctor","risk":"low"}'),
-('Kabir Mehta','kabir@example.com','9876501005','{"verified":false,"occupation":"Student","risk":"medium"}'),
-('Ishita Nair','ishita@example.com','9876501006','{"verified":true,"occupation":"Architect","risk":"low"}'),
-('Rohan Das','rohan@example.com','9876501007','{"verified":true,"occupation":"Consultant","risk":"low"}'),
-('Meera Reddy','meera@example.com','9876501008','{"verified":true,"occupation":"Entrepreneur","risk":"medium"}');
-INSERT INTO accounts(number,customer_id,branch_id,kind,balance,status) SELECT 'VB1000'||id,id,1+(id%4),CASE WHEN id%3=0 THEN 'Current' ELSE 'Savings' END,75000+id*42000,'Active' FROM customers;
-INSERT INTO accounts(number,customer_id,branch_id,kind,balance,status) VALUES('VB10009',1,2,'Current',450000,'Active'),('VB100010',5,3,'Savings',25000,'Frozen');
-DO $$ DECLARE i INTEGER; BEGIN FOR i IN 1..80 LOOP
-PERFORM transfer_funds(1+(i%8),1+((i+1)%8),(500+(i*317)%12000)::numeric, (ARRAY['Vendor payment','Monthly rent','Consulting fee','Family transfer','Invoice settlement'])[1+(i%5)]);
-UPDATE transfers SET created_at=now() - ((80-i)||' hours')::interval WHERE id=i;
-END LOOP; END $$;
-INSERT INTO loans(customer_id,kind,principal,rate,months,status) VALUES(1,'Home loan',4500000,8.5,240,'Active'),(3,'Business loan',1200000,11.25,60,'Active'),(4,'Vehicle loan',850000,9.2,60,'Active'),(5,'Education loan',600000,7.5,84,'Pending'),(8,'Business loan',2000000,10.5,72,'Pending');
+ALTER TABLE loans ADD FOREIGN KEY (reviewed_by) REFERENCES app_users(id);
+CREATE INDEX sessions_expiry_idx ON app_sessions(expires_at);
+CREATE FULLTEXT INDEX transfer_text ON transfers(narration);
 
-SELECT count(*) AS seeded_accounts FROM accounts;
-CREATE TEMP TABLE counter_receipts (id integer PRIMARY KEY);
-ALTER TABLE counter_receipts ADD COLUMN note text;
-INSERT INTO counter_receipts VALUES (1, 'Deposit');
-UPDATE counter_receipts SET note = 'Deposit verified' WHERE id = 1 RETURNING *;
-DELETE FROM counter_receipts WHERE id = 1 RETURNING *;
-DROP TABLE counter_receipts;
-ROLLBACK;
+DELIMITER //
+CREATE TRIGGER balance_audit AFTER UPDATE ON accounts FOR EACH ROW
+BEGIN
+ IF OLD.balance <> NEW.balance THEN
+  INSERT INTO audit_log(account_id,old_balance,new_balance,actor)
+  VALUES(NEW.id,OLD.balance,NEW.balance,USER());
+ END IF;
+END//
+CREATE FUNCTION monthly_emi(p DECIMAL(16,2),r DECIMAL(6,2),n INT)
+RETURNS DECIMAL(16,2) DETERMINISTIC NO SQL
+RETURN IF(r=0,p/n,p*(r/1200)/(1-POWER(1+r/1200,-n)))//
+CREATE FUNCTION transfer_funds(src INT,dst INT,amount_in DECIMAL(24,8),note VARCHAR(255))
+RETURNS INT MODIFIES SQL DATA
+BEGIN
+ DECLARE first_id, second_id INT;
+ DECLARE available DECIMAL(16,2);
+ IF src=dst OR amount_in IS NULL OR amount_in<=0 OR ROUND(amount_in,2)<>amount_in THEN
+  SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Invalid accounts or amount';
+ END IF;
+ SELECT id INTO first_id FROM accounts WHERE id=LEAST(src,dst) AND status='Active' FOR UPDATE;
+ SELECT id INTO second_id FROM accounts WHERE id=GREATEST(src,dst) AND status='Active' FOR UPDATE;
+ IF first_id IS NULL OR second_id IS NULL THEN
+  SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Both accounts must exist and be active';
+ END IF;
+ SELECT balance INTO available FROM accounts WHERE id=src FOR UPDATE;
+ IF available<amount_in THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Insufficient funds'; END IF;
+ UPDATE accounts SET balance=balance-amount_in WHERE id=src;
+ UPDATE accounts SET balance=balance+amount_in WHERE id=dst;
+ INSERT INTO transfers(from_account,to_account,amount,narration) VALUES(src,dst,amount_in,COALESCE(NULLIF(TRIM(note),''),'Account transfer'));
+ RETURN LAST_INSERT_ID();
+END//
+DELIMITER ;
+START TRANSACTION;
+INSERT INTO branches (id,name,city,parent_id) VALUES (1, 'Head Office', 'Bengaluru', NULL);
+INSERT INTO branches (id,name,city,parent_id) VALUES (2, 'Indiranagar', 'Bengaluru', 1);
+INSERT INTO branches (id,name,city,parent_id) VALUES (3, 'Koramangala', 'Bengaluru', 1);
+INSERT INTO branches (id,name,city,parent_id) VALUES (4, 'Jayanagar', 'Bengaluru', 1);
+INSERT INTO customers (id,name,email,phone,kyc,created_at) VALUES (1, 'Aarav Sharma', 'aarav@example.com', '9876501001', '{"risk":"low","verified":true,"occupation":"Engineer"}', '2026-11-20 06:20:21.133');
+INSERT INTO customers (id,name,email,phone,kyc,created_at) VALUES (2, 'Diya Patel', 'diya@example.com', '9876501002', '{"risk":"low","verified":true,"occupation":"Designer"}', '2026-11-20 06:20:21.133');
+INSERT INTO customers (id,name,email,phone,kyc,created_at) VALUES (3, 'Arjun Rao', 'arjun@example.com', '9876501003', '{"risk":"medium","verified":true,"occupation":"Business owner"}', '2026-11-20 06:20:21.133');
+INSERT INTO customers (id,name,email,phone,kyc,created_at) VALUES (4, 'Ananya Iyer', 'ananya@example.com', '9876501004', '{"risk":"low","verified":true,"occupation":"Doctor"}', '2026-11-20 06:20:21.133');
+INSERT INTO customers (id,name,email,phone,kyc,created_at) VALUES (5, 'Kabir Mehta', 'kabir@example.com', '9876501005', '{"risk":"medium","verified":false,"occupation":"Student"}', '2026-11-20 06:20:21.133');
+INSERT INTO customers (id,name,email,phone,kyc,created_at) VALUES (6, 'Ishita Nair', 'ishita@example.com', '9876501006', '{"risk":"low","verified":true,"occupation":"Architect"}', '2026-11-20 06:20:21.133');
+INSERT INTO customers (id,name,email,phone,kyc,created_at) VALUES (7, 'Rohan Das', 'rohan@example.com', '9876501007', '{"risk":"low","verified":true,"occupation":"Consultant"}', '2026-11-20 06:20:21.133');
+INSERT INTO customers (id,name,email,phone,kyc,created_at) VALUES (8, 'Meera Reddy', 'meera@example.com', '9876501008', '{"risk":"medium","verified":true,"occupation":"Entrepreneur"}', '2026-11-20 06:20:21.133');
+INSERT INTO accounts (id,number,customer_id,branch_id,kind,balance,status) VALUES (1, 'VB10001', 1, 2, 'Savings', '113830.00', 'Active');
+INSERT INTO accounts (id,number,customer_id,branch_id,kind,balance,status) VALUES (2, 'VB10002', 2, 3, 'Savings', '157190.00', 'Active');
+INSERT INTO accounts (id,number,customer_id,branch_id,kind,balance,status) VALUES (3, 'VB10003', 3, 4, 'Current', '197830.00', 'Active');
+INSERT INTO accounts (id,number,customer_id,branch_id,kind,balance,status) VALUES (4, 'VB10004', 4, 1, 'Savings', '239830.00', 'Active');
+INSERT INTO accounts (id,number,customer_id,branch_id,kind,balance,status) VALUES (5, 'VB10005', 5, 2, 'Savings', '293830.00', 'Active');
+INSERT INTO accounts (id,number,customer_id,branch_id,kind,balance,status) VALUES (6, 'VB10006', 6, 3, 'Current', '323830.00', 'Active');
+INSERT INTO accounts (id,number,customer_id,branch_id,kind,balance,status) VALUES (7, 'VB10007', 7, 4, 'Savings', '377830.00', 'Active');
+INSERT INTO accounts (id,number,customer_id,branch_id,kind,balance,status) VALUES (8, 'VB10008', 8, 1, 'Savings', '407830.00', 'Active');
+INSERT INTO accounts (id,number,customer_id,branch_id,kind,balance,status) VALUES (9, 'VB10009', 1, 2, 'Current', '450000.00', 'Active');
+INSERT INTO accounts (id,number,customer_id,branch_id,kind,balance,status) VALUES (10, 'VB100010', 5, 3, 'Savings', '25000.00', 'Frozen');
+INSERT INTO app_users (id,name,email,password_hash,role,customer_id) VALUES (1, 'Priya Menon', 'admin@vault.bank', '83aeb66d18e292ba2d645807a0a704f0:d1d08734879256f446d4b6f0646a5250a0ec853d9fb0de75cd7e6cdc75cef149c437aff081efb8839e09863129810af7ca1e55997481fb965381764b69a81005', 'admin', NULL);
+INSERT INTO app_users (id,name,email,password_hash,role,customer_id) VALUES (2, 'Vikram Singh', 'employee@vault.bank', '83aeb66d18e292ba2d645807a0a704f0:d1d08734879256f446d4b6f0646a5250a0ec853d9fb0de75cd7e6cdc75cef149c437aff081efb8839e09863129810af7ca1e55997481fb965381764b69a81005', 'employee', NULL);
+INSERT INTO app_users (id,name,email,password_hash,role,customer_id) VALUES (3, 'Aarav Sharma', 'aarav@example.com', '83aeb66d18e292ba2d645807a0a704f0:d1d08734879256f446d4b6f0646a5250a0ec853d9fb0de75cd7e6cdc75cef149c437aff081efb8839e09863129810af7ca1e55997481fb965381764b69a81005', 'customer', 1);
+INSERT INTO app_users (id,name,email,password_hash,role,customer_id) VALUES (4, 'Diya Patel', 'diya@example.com', '83aeb66d18e292ba2d645807a0a704f0:d1d08734879256f446d4b6f0646a5250a0ec853d9fb0de75cd7e6cdc75cef149c437aff081efb8839e09863129810af7ca1e55997481fb965381764b69a81005', 'customer', 2);
+INSERT INTO app_users (id,name,email,password_hash,role,customer_id) VALUES (5, 'Arjun Rao', 'arjun@example.com', '83aeb66d18e292ba2d645807a0a704f0:d1d08734879256f446d4b6f0646a5250a0ec853d9fb0de75cd7e6cdc75cef149c437aff081efb8839e09863129810af7ca1e55997481fb965381764b69a81005', 'customer', 3);
+INSERT INTO app_users (id,name,email,password_hash,role,customer_id) VALUES (6, 'Ananya Iyer', 'ananya@example.com', '83aeb66d18e292ba2d645807a0a704f0:d1d08734879256f446d4b6f0646a5250a0ec853d9fb0de75cd7e6cdc75cef149c437aff081efb8839e09863129810af7ca1e55997481fb965381764b69a81005', 'customer', 4);
+INSERT INTO app_users (id,name,email,password_hash,role,customer_id) VALUES (7, 'Kabir Mehta', 'kabir@example.com', '83aeb66d18e292ba2d645807a0a704f0:d1d08734879256f446d4b6f0646a5250a0ec853d9fb0de75cd7e6cdc75cef149c437aff081efb8839e09863129810af7ca1e55997481fb965381764b69a81005', 'customer', 5);
+INSERT INTO app_users (id,name,email,password_hash,role,customer_id) VALUES (8, 'Ishita Nair', 'ishita@example.com', '83aeb66d18e292ba2d645807a0a704f0:d1d08734879256f446d4b6f0646a5250a0ec853d9fb0de75cd7e6cdc75cef149c437aff081efb8839e09863129810af7ca1e55997481fb965381764b69a81005', 'customer', 6);
+INSERT INTO app_users (id,name,email,password_hash,role,customer_id) VALUES (9, 'Rohan Das', 'rohan@example.com', '83aeb66d18e292ba2d645807a0a704f0:d1d08734879256f446d4b6f0646a5250a0ec853d9fb0de75cd7e6cdc75cef149c437aff081efb8839e09863129810af7ca1e55997481fb965381764b69a81005', 'customer', 7);
+INSERT INTO app_users (id,name,email,password_hash,role,customer_id) VALUES (10, 'Meera Reddy', 'meera@example.com', '83aeb66d18e292ba2d645807a0a704f0:d1d08734879256f446d4b6f0646a5250a0ec853d9fb0de75cd7e6cdc75cef149c437aff081efb8839e09863129810af7ca1e55997481fb965381764b69a81005', 'customer', 8);
+INSERT INTO loans (id,customer_id,kind,principal,rate,months,status,reviewed_by,reviewed_at) VALUES (1, 1, 'Home loan', '4500000.00', '8.50', 240, 'Active', NULL, NULL);
+INSERT INTO loans (id,customer_id,kind,principal,rate,months,status,reviewed_by,reviewed_at) VALUES (2, 3, 'Business loan', '1200000.00', '11.25', 60, 'Active', NULL, NULL);
+INSERT INTO loans (id,customer_id,kind,principal,rate,months,status,reviewed_by,reviewed_at) VALUES (3, 4, 'Vehicle loan', '850000.00', '9.20', 60, 'Active', NULL, NULL);
+INSERT INTO loans (id,customer_id,kind,principal,rate,months,status,reviewed_by,reviewed_at) VALUES (4, 5, 'Education loan', '600000.00', '7.50', 84, 'Pending', NULL, NULL);
+INSERT INTO loans (id,customer_id,kind,principal,rate,months,status,reviewed_by,reviewed_at) VALUES (5, 8, 'Business loan', '2000000.00', '10.50', 72, 'Pending', NULL, NULL);
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (1, 2, 3, '817.00', 'Monthly rent', '2026-11-16 23:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (2, 3, 4, '1134.00', 'Consulting fee', '2026-11-17 00:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (3, 4, 5, '1451.00', 'Family transfer', '2026-11-17 01:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (4, 5, 6, '1768.00', 'Invoice settlement', '2026-11-17 02:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (5, 6, 7, '2085.00', 'Vendor payment', '2026-11-17 03:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (6, 7, 8, '2402.00', 'Monthly rent', '2026-11-17 04:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (7, 8, 1, '2719.00', 'Consulting fee', '2026-11-17 05:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (8, 1, 2, '3036.00', 'Family transfer', '2026-11-17 06:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (9, 2, 3, '3353.00', 'Invoice settlement', '2026-11-17 07:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (10, 3, 4, '3670.00', 'Vendor payment', '2026-11-17 08:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (11, 4, 5, '3987.00', 'Monthly rent', '2026-11-17 09:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (12, 5, 6, '4304.00', 'Consulting fee', '2026-11-17 10:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (13, 6, 7, '4621.00', 'Family transfer', '2026-11-17 11:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (14, 7, 8, '4938.00', 'Invoice settlement', '2026-11-17 12:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (15, 8, 1, '5255.00', 'Vendor payment', '2026-11-17 13:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (16, 1, 2, '5572.00', 'Monthly rent', '2026-11-17 14:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (17, 2, 3, '5889.00', 'Consulting fee', '2026-11-17 15:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (18, 3, 4, '6206.00', 'Family transfer', '2026-11-17 16:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (19, 4, 5, '6523.00', 'Invoice settlement', '2026-11-17 17:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (20, 5, 6, '6840.00', 'Vendor payment', '2026-11-17 18:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (21, 6, 7, '7157.00', 'Monthly rent', '2026-11-17 19:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (22, 7, 8, '7474.00', 'Consulting fee', '2026-11-17 20:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (23, 8, 1, '7791.00', 'Family transfer', '2026-11-17 21:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (24, 1, 2, '8108.00', 'Invoice settlement', '2026-11-17 22:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (25, 2, 3, '8425.00', 'Vendor payment', '2026-11-17 23:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (26, 3, 4, '8742.00', 'Monthly rent', '2026-11-18 00:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (27, 4, 5, '9059.00', 'Consulting fee', '2026-11-18 01:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (28, 5, 6, '9376.00', 'Family transfer', '2026-11-18 02:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (29, 6, 7, '9693.00', 'Invoice settlement', '2026-11-18 03:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (30, 7, 8, '10010.00', 'Vendor payment', '2026-11-18 04:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (31, 8, 1, '10327.00', 'Monthly rent', '2026-11-18 05:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (32, 1, 2, '10644.00', 'Consulting fee', '2026-11-18 06:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (33, 2, 3, '10961.00', 'Family transfer', '2026-11-18 07:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (34, 3, 4, '11278.00', 'Invoice settlement', '2026-11-18 08:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (35, 4, 5, '11595.00', 'Vendor payment', '2026-11-18 09:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (36, 5, 6, '11912.00', 'Monthly rent', '2026-11-18 10:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (37, 6, 7, '12229.00', 'Consulting fee', '2026-11-18 11:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (38, 7, 8, '546.00', 'Family transfer', '2026-11-18 12:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (39, 8, 1, '863.00', 'Invoice settlement', '2026-11-18 13:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (40, 1, 2, '1180.00', 'Vendor payment', '2026-11-18 14:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (41, 2, 3, '1497.00', 'Monthly rent', '2026-11-18 15:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (42, 3, 4, '1814.00', 'Consulting fee', '2026-11-18 16:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (43, 4, 5, '2131.00', 'Family transfer', '2026-11-18 17:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (44, 5, 6, '2448.00', 'Invoice settlement', '2026-11-18 18:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (45, 6, 7, '2765.00', 'Vendor payment', '2026-11-18 19:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (46, 7, 8, '3082.00', 'Monthly rent', '2026-11-18 20:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (47, 8, 1, '3399.00', 'Consulting fee', '2026-11-18 21:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (48, 1, 2, '3716.00', 'Family transfer', '2026-11-18 22:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (49, 2, 3, '4033.00', 'Invoice settlement', '2026-11-18 23:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (50, 3, 4, '4350.00', 'Vendor payment', '2026-11-19 00:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (51, 4, 5, '4667.00', 'Monthly rent', '2026-11-19 01:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (52, 5, 6, '4984.00', 'Consulting fee', '2026-11-19 02:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (53, 6, 7, '5301.00', 'Family transfer', '2026-11-19 03:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (54, 7, 8, '5618.00', 'Invoice settlement', '2026-11-19 04:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (55, 8, 1, '5935.00', 'Vendor payment', '2026-11-19 05:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (56, 1, 2, '6252.00', 'Monthly rent', '2026-11-19 06:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (57, 2, 3, '6569.00', 'Consulting fee', '2026-11-19 07:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (58, 3, 4, '6886.00', 'Family transfer', '2026-11-19 08:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (59, 4, 5, '7203.00', 'Invoice settlement', '2026-11-19 09:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (60, 5, 6, '7520.00', 'Vendor payment', '2026-11-19 10:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (61, 6, 7, '7837.00', 'Monthly rent', '2026-11-19 11:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (62, 7, 8, '8154.00', 'Consulting fee', '2026-11-19 12:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (63, 8, 1, '8471.00', 'Family transfer', '2026-11-19 13:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (64, 1, 2, '8788.00', 'Invoice settlement', '2026-11-19 14:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (65, 2, 3, '9105.00', 'Vendor payment', '2026-11-19 15:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (66, 3, 4, '9422.00', 'Monthly rent', '2026-11-19 16:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (67, 4, 5, '9739.00', 'Consulting fee', '2026-11-19 17:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (68, 5, 6, '10056.00', 'Family transfer', '2026-11-19 18:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (69, 6, 7, '10373.00', 'Invoice settlement', '2026-11-19 19:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (70, 7, 8, '10690.00', 'Vendor payment', '2026-11-19 20:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (71, 8, 1, '11007.00', 'Monthly rent', '2026-11-19 21:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (72, 1, 2, '11324.00', 'Consulting fee', '2026-11-19 22:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (73, 2, 3, '11641.00', 'Family transfer', '2026-11-19 23:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (74, 3, 4, '11958.00', 'Invoice settlement', '2026-11-20 00:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (75, 4, 5, '12275.00', 'Vendor payment', '2026-11-20 01:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (76, 5, 6, '592.00', 'Monthly rent', '2026-11-20 02:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (77, 6, 7, '909.00', 'Consulting fee', '2026-11-20 03:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (78, 7, 8, '1226.00', 'Family transfer', '2026-11-20 04:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (79, 8, 1, '1543.00', 'Invoice settlement', '2026-11-20 05:20:21.133');
+INSERT INTO transfers (id,from_account,to_account,amount,narration,created_at) VALUES (80, 1, 2, '1860.00', 'Vendor payment', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (1, 2, '159000.00', '158183.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (2, 3, '201000.00', '201817.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (3, 3, '201817.00', '200683.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (4, 4, '243000.00', '244134.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (5, 4, '244134.00', '242683.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (6, 5, '285000.00', '286451.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (7, 5, '286451.00', '284683.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (8, 6, '327000.00', '328768.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (9, 6, '328768.00', '326683.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (10, 7, '369000.00', '371085.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (11, 7, '371085.00', '368683.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (12, 8, '411000.00', '413402.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (13, 8, '413402.00', '410683.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (14, 1, '117000.00', '119719.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (15, 1, '119719.00', '116683.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (16, 2, '158183.00', '161219.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (17, 2, '161219.00', '157866.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (18, 3, '200683.00', '204036.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (19, 3, '204036.00', '200366.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (20, 4, '242683.00', '246353.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (21, 4, '246353.00', '242366.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (22, 5, '284683.00', '288670.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (23, 5, '288670.00', '284366.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (24, 6, '326683.00', '330987.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (25, 6, '330987.00', '326366.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (26, 7, '368683.00', '373304.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (27, 7, '373304.00', '368366.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (28, 8, '410683.00', '415621.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (29, 8, '415621.00', '410366.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (30, 1, '116683.00', '121938.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (31, 1, '121938.00', '116366.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (32, 2, '157866.00', '163438.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (33, 2, '163438.00', '157549.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (34, 3, '200366.00', '206255.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (35, 3, '206255.00', '200049.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (36, 4, '242366.00', '248572.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (37, 4, '248572.00', '242049.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (38, 5, '284366.00', '290889.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (39, 5, '290889.00', '284049.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (40, 6, '326366.00', '333206.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (41, 6, '333206.00', '326049.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (42, 7, '368366.00', '375523.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (43, 7, '375523.00', '368049.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (44, 8, '410366.00', '417840.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (45, 8, '417840.00', '410049.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (46, 1, '116366.00', '124157.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (47, 1, '124157.00', '116049.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (48, 2, '157549.00', '165657.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (49, 2, '165657.00', '157232.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (50, 3, '200049.00', '208474.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (51, 3, '208474.00', '199732.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (52, 4, '242049.00', '250791.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (53, 4, '250791.00', '241732.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (54, 5, '284049.00', '293108.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (55, 5, '293108.00', '283732.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (56, 6, '326049.00', '335425.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (57, 6, '335425.00', '325732.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (58, 7, '368049.00', '377742.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (59, 7, '377742.00', '367732.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (60, 8, '410049.00', '420059.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (61, 8, '420059.00', '409732.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (62, 1, '116049.00', '126376.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (63, 1, '126376.00', '115732.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (64, 2, '157232.00', '167876.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (65, 2, '167876.00', '156915.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (66, 3, '199732.00', '210693.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (67, 3, '210693.00', '199415.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (68, 4, '241732.00', '253010.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (69, 4, '253010.00', '241415.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (70, 5, '283732.00', '295327.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (71, 5, '295327.00', '283415.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (72, 6, '325732.00', '337644.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (73, 6, '337644.00', '325415.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (74, 7, '367732.00', '379961.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (75, 7, '379961.00', '379415.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (76, 8, '409732.00', '410278.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (77, 8, '410278.00', '409415.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (78, 1, '115732.00', '116595.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (79, 1, '116595.00', '115415.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (80, 2, '156915.00', '158095.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (81, 2, '158095.00', '156598.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (82, 3, '199415.00', '200912.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (83, 3, '200912.00', '199098.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (84, 4, '241415.00', '243229.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (85, 4, '243229.00', '241098.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (86, 5, '283415.00', '285546.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (87, 5, '285546.00', '283098.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (88, 6, '325415.00', '327863.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (89, 6, '327863.00', '325098.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (90, 7, '379415.00', '382180.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (91, 7, '382180.00', '379098.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (92, 8, '409415.00', '412497.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (93, 8, '412497.00', '409098.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (94, 1, '115415.00', '118814.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (95, 1, '118814.00', '115098.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (96, 2, '156598.00', '160314.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (97, 2, '160314.00', '156281.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (98, 3, '199098.00', '203131.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (99, 3, '203131.00', '198781.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (100, 4, '241098.00', '245448.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (101, 4, '245448.00', '240781.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (102, 5, '283098.00', '287765.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (103, 5, '287765.00', '282781.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (104, 6, '325098.00', '330082.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (105, 6, '330082.00', '324781.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (106, 7, '379098.00', '384399.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (107, 7, '384399.00', '378781.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (108, 8, '409098.00', '414716.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (109, 8, '414716.00', '408781.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (110, 1, '115098.00', '121033.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (111, 1, '121033.00', '114781.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (112, 2, '156281.00', '162533.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (113, 2, '162533.00', '155964.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (114, 3, '198781.00', '205350.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (115, 3, '205350.00', '198464.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (116, 4, '240781.00', '247667.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (117, 4, '247667.00', '240464.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (118, 5, '282781.00', '289984.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (119, 5, '289984.00', '282464.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (120, 6, '324781.00', '332301.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (121, 6, '332301.00', '324464.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (122, 7, '378781.00', '386618.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (123, 7, '386618.00', '378464.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (124, 8, '408781.00', '416935.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (125, 8, '416935.00', '408464.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (126, 1, '114781.00', '123252.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (127, 1, '123252.00', '114464.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (128, 2, '155964.00', '164752.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (129, 2, '164752.00', '155647.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (130, 3, '198464.00', '207569.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (131, 3, '207569.00', '198147.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (132, 4, '240464.00', '249886.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (133, 4, '249886.00', '240147.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (134, 5, '282464.00', '292203.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (135, 5, '292203.00', '282147.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (136, 6, '324464.00', '334520.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (137, 6, '334520.00', '324147.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (138, 7, '378464.00', '388837.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (139, 7, '388837.00', '378147.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (140, 8, '408464.00', '419154.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (141, 8, '419154.00', '408147.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (142, 1, '114464.00', '125471.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (143, 1, '125471.00', '114147.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (144, 2, '155647.00', '166971.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (145, 2, '166971.00', '155330.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (146, 3, '198147.00', '209788.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (147, 3, '209788.00', '197830.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (148, 4, '240147.00', '252105.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (149, 4, '252105.00', '239830.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (150, 5, '282147.00', '294422.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (151, 5, '294422.00', '293830.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (152, 6, '324147.00', '324739.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (153, 6, '324739.00', '323830.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (154, 7, '378147.00', '379056.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (155, 7, '379056.00', '377830.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (156, 8, '408147.00', '409373.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (157, 8, '409373.00', '407830.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (158, 1, '114147.00', '115690.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (159, 1, '115690.00', '113830.00', 'demo_seed', '2026-11-20 06:20:21.133');
+INSERT INTO audit_log (id,account_id,old_balance,new_balance,actor,created_at) VALUES (160, 2, '155330.00', '157190.00', 'demo_seed', '2026-11-20 06:20:21.133');
+COMMIT;
+CREATE TEMPORARY TABLE receipts (id INT PRIMARY KEY, note VARCHAR(80));
+INSERT INTO receipts VALUES (1,'Deposit');
+UPDATE receipts SET note='Verified deposit' WHERE id=1;
+SELECT * FROM receipts;
+DELETE FROM receipts WHERE id=1;
+DROP TEMPORARY TABLE receipts;
